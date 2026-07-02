@@ -227,10 +227,60 @@ let _uid = 0;
 // random suffix so ids never collide with those in a loaded saved world
 const uid = (t) => `${t}-${++_uid}-${Math.random().toString(36).slice(2, 6)}`;
 
-// Persist saved worlds in localStorage (guarded for the SSR render check).
+// Generic localStorage helpers (guarded for the SSR render check + private mode).
+const lsGet = (k, fb) => { try { const v = localStorage.getItem(k); return v == null ? fb : JSON.parse(v); } catch (e) { return fb; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
+
+// Persist saved worlds in localStorage.
 const WORLDS_KEY = 'v2x_worlds_v1';
-const loadWorlds = () => { try { return JSON.parse(localStorage.getItem(WORLDS_KEY) || '[]'); } catch (e) { return []; } };
-const saveWorlds = (list) => { try { localStorage.setItem(WORLDS_KEY, JSON.stringify(list)); } catch (e) {} };
+const loadWorlds = () => lsGet(WORLDS_KEY, []);
+const saveWorlds = (list) => lsSet(WORLDS_KEY, list);
+
+// A world is just { name, objects, conns }. These move it in/out of files & URLs.
+const worldPayload = (name, objects, conns) => ({ _v: 1, name, objects, conns });
+const encodeWorld = (w) => { try { return encodeURIComponent(JSON.stringify(w)); } catch (e) { return ''; } };
+const decodeWorld = (s) => { try { const w = JSON.parse(decodeURIComponent(s)); return w && Array.isArray(w.objects) ? w : null; } catch (e) { return null; } };
+
+// Trigger a browser download of a text file.
+function downloadFile(name, text, mime) {
+  try {
+    const url = URL.createObjectURL(new Blob([text], { type: mime }));
+    const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 800);
+  } catch (e) {}
+}
+
+// Serialize an SVG with Tailwind/class styles baked in (inline), so it renders
+// standalone outside the app. Used for both SVG and PNG canvas export.
+const SVG_STYLE_PROPS = ['fill', 'fill-opacity', 'stroke', 'stroke-width', 'stroke-dasharray', 'stroke-linecap', 'stroke-linejoin', 'opacity', 'font-size', 'font-family', 'font-weight', 'text-anchor'];
+function serializeStyledSvg(svg, bg) {
+  const clone = svg.cloneNode(true);
+  const inline = (src, dst) => {
+    const cs = getComputedStyle(src);
+    let s = '';
+    SVG_STYLE_PROPS.forEach((p) => { const v = cs.getPropertyValue(p); if (v) s += p + ':' + v + ';'; });
+    dst.setAttribute('style', s);
+    for (let i = 0; i < src.children.length; i++) if (dst.children[i]) inline(src.children[i], dst.children[i]);
+  };
+  inline(svg, clone);
+  const vb = (svg.getAttribute('viewBox') || '0 0 1000 640').split(/\s+/);
+  const w = +vb[2], h = +vb[3];
+  clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  clone.setAttribute('width', w); clone.setAttribute('height', h);
+  if (bg) { const r = document.createElementNS('http://www.w3.org/2000/svg', 'rect'); r.setAttribute('width', w); r.setAttribute('height', h); r.setAttribute('fill', bg); clone.insertBefore(r, clone.firstChild); }
+  return { text: new XMLSerializer().serializeToString(clone), w, h };
+}
+function exportSvg(svg, bg, name) { const { text } = serializeStyledSvg(svg, bg); downloadFile(name, text, 'image/svg+xml'); }
+function exportPng(svg, bg, scale, name) {
+  const { text, w, h } = serializeStyledSvg(svg, bg);
+  const img = new Image();
+  img.onload = () => {
+    const c = document.createElement('canvas'); c.width = w * scale; c.height = h * scale;
+    const ctx = c.getContext('2d'); ctx.fillStyle = bg; ctx.fillRect(0, 0, c.width, c.height); ctx.drawImage(img, 0, 0, c.width, c.height);
+    c.toBlob((b) => { if (!b) return; const url = URL.createObjectURL(b); const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 800); });
+  };
+  img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(text);
+}
 
 // Convert a client (screen) point to SVG viewBox coordinates, handling any
 // scaling/letterboxing via the SVG's own coordinate transform matrix.
@@ -350,22 +400,27 @@ function SpecSheet({ type, model }) {
 }
 
 function WorldBuilderTab() {
-  const [objects, setObjects] = useState([]);
-  const [conns, setConns] = useState([]);
+  const prefs = lsGet('v2x_wb_prefs', {});              // restore UI state across reloads
+  const startWorld = loadWorlds().find((w) => w.id === prefs.activeId) || null;
+  const [objects, setObjects] = useState(() => (startWorld ? startWorld.objects : []));
+  const [conns, setConns] = useState(() => (startWorld ? startWorld.conns : []));
   const [sel, setSel] = useState(null);              // {kind:'obj'|'conn', id}
-  const [snap, setSnap] = useState(true);
-  const drag = useRef(null);                          // {id, ox, oy}
+  const [snap, setSnap] = useState(prefs.snap !== undefined ? prefs.snap : true);
+  const drag = useRef(null);                          // {id, ox, oy, pre, moved}
   const [wiring, setWiring] = useState(null);         // {from, x, y}
   const [sim, setSim] = useState(false);              // "Simulate this world" running?
   const [phase, setPhase] = useState(0);              // looping 0..1 clock for packet flow
-  const [dirMode, setDirMode] = useState('both');     // 'fwd' | 'rev' | 'both'
-  const [enabled, setEnabled] = useState({});         // per-message on/off (missing = on)
-  const [mapStore, setMapStore] = useState('rsu');    // where MAP geometry lives: 'rsu' | 'tc'
+  const [dirMode, setDirMode] = useState(prefs.dirMode || 'both'); // 'fwd' | 'rev' | 'both'
+  const [enabled, setEnabled] = useState(prefs.enabled || {});     // per-message on/off (missing = on)
+  const [mapStore, setMapStore] = useState(prefs.mapStore || 'rsu'); // MAP geometry: 'rsu' | 'tc'
   const [worlds, setWorlds] = useState(loadWorlds);   // saved worlds (localStorage)
-  const [activeId, setActiveId] = useState(null);     // currently-loaded world id
-  const [worldName, setWorldName] = useState('');
+  const [activeId, setActiveId] = useState(startWorld ? startWorld.id : null);
+  const [worldName, setWorldName] = useState(startWorld ? startWorld.name : '');
+  const [undoStack, setUndo] = useState([]);
+  const [redoStack, setRedo] = useState([]);
   const simRaf = useRef(null);
   const svgRef = useRef(null);
+  const fileRef = useRef(null);                        // hidden <input type=file> for import
 
   const byId = useMemo(() => Object.fromEntries(objects.map((o) => [o.id, o])), [objects]);
   const selObj = sel?.kind === 'obj' ? byId[sel.id] : null;
@@ -374,7 +429,13 @@ function WorldBuilderTab() {
   const snapV = (v) => (snap ? Math.round(v / 10) * 10 : Math.round(v));
   const clampC = (o) => ({ ...o, x: Math.max(20, Math.min(WB.w - 20, o.x)), y: Math.max(20, Math.min(WB.h - 20, o.y)) });
 
+  // ----- undo / redo (snapshot current canvas before each discrete edit) -----
+  const pushUndo = () => { setUndo((u) => [...u.slice(-49), { objects, conns }]); setRedo([]); };
+  const undo = () => { if (!undoStack.length) return; const prev = undoStack[undoStack.length - 1]; setRedo((r) => [...r, { objects, conns }]); setUndo((u) => u.slice(0, -1)); setObjects(prev.objects); setConns(prev.conns); setSel(null); };
+  const redo = () => { if (!redoStack.length) return; const nxt = redoStack[redoStack.length - 1]; setUndo((u) => [...u, { objects, conns }]); setRedo((r) => r.slice(0, -1)); setObjects(nxt.objects); setConns(nxt.conns); setSel(null); };
+
   const addObject = (type, pos) => {
+    pushUndo();
     const modelId = MODELS[type]?.[0]?.id;
     const o = clampC({ id: uid(type), type, modelId, x: snapV(pos.x), y: snapV(pos.y) });
     setObjects((prev) => [...prev, o]);
@@ -384,6 +445,7 @@ function WorldBuilderTab() {
   // Drop a whole pre-wired 4-way intersection: roads, TC, RSU, four signal
   // heads (each wired to the TC) and an approaching vehicle wired to the RSU.
   const addIntersection = (pos) => {
+    pushUndo();
     const cx = pos.x, cy = pos.y;
     const mk = (type, dx, dy) => clampC({ id: uid(type), type, modelId: MODELS[type]?.[0]?.id, x: cx + dx, y: cy + dy });
     const roadH = mk('roadH', 0, 0), roadV = mk('roadV', 0, 0);
@@ -396,6 +458,7 @@ function WorldBuilderTab() {
   };
   const removeSelected = useCallback(() => {
     if (!sel) return;
+    setUndo((u) => [...u.slice(-49), { objects, conns }]); setRedo([]);
     if (sel.kind === 'obj') {
       setObjects((prev) => prev.filter((o) => o.id !== sel.id));
       setConns((prev) => prev.filter((c) => c.from !== sel.id && c.to !== sel.id));
@@ -403,11 +466,11 @@ function WorldBuilderTab() {
       setConns((prev) => prev.filter((c) => c.id !== sel.id));
     }
     setSel(null);
-  }, [sel]);
+  }, [sel, objects, conns]);
 
   // ----- world management (save / load / delete / new) -----
   const persistWorlds = (list) => { setWorlds(list); saveWorlds(list); };
-  const newWorld = () => { setObjects([]); setConns([]); setSel(null); setSim(false); setActiveId(null); setWorldName(''); };
+  const newWorld = () => { pushUndo(); setObjects([]); setConns([]); setSel(null); setSim(false); setActiveId(null); setWorldName(''); };
   const saveWorld = () => {
     const name = (worldName.trim() || 'Untitled world');
     if (activeId && worlds.some((w) => w.id === activeId)) {
@@ -417,15 +480,66 @@ function WorldBuilderTab() {
       persistWorlds([...worlds, w]); setActiveId(w.id);
     }
   };
-  const loadWorld = (w) => { setObjects(w.objects || []); setConns(w.conns || []); setSel(null); setSim(false); setActiveId(w.id); setWorldName(w.name); };
-  const deleteWorld = (id) => { persistWorlds(worlds.filter((w) => w.id !== id)); if (activeId === id) newWorld(); };
+  const loadWorld = (w) => { pushUndo(); setObjects(w.objects || []); setConns(w.conns || []); setSel(null); setSim(false); setActiveId(w.id); setWorldName(w.name); };
+  const deleteWorld = (id) => {
+    const w = worlds.find((x) => x.id === id);
+    if (!window.confirm(`Delete world "${w ? w.name : ''}"? This cannot be undone.`)) return;
+    persistWorlds(worlds.filter((x) => x.id !== id));
+    if (activeId === id) newWorld();
+  };
+  const clearAll = () => {
+    if (!objects.length && !conns.length) return;
+    if (!window.confirm('Clear the whole canvas? (You can still Undo.)')) return;
+    pushUndo(); setObjects([]); setConns([]); setSel(null); setSim(false);
+  };
 
-  // keyboard delete
+  // ----- portability: file export / import + shareable link -----
+  const exportWorld = () => {
+    const name = (worldName.trim() || 'v2x-world');
+    downloadFile(name.replace(/\s+/g, '_') + '.v2xworld.json', JSON.stringify(worldPayload(name, objects, conns), null, 2), 'application/json');
+  };
+  const importWorld = (file) => {
+    if (!file) return;
+    const r = new FileReader();
+    r.onload = () => {
+      const w = (() => { try { const p = JSON.parse(r.result); return p && Array.isArray(p.objects) ? p : null; } catch (e) { return null; } })();
+      if (!w) { window.alert('That file is not a valid V2X world (.v2xworld.json).'); return; }
+      const nw = { id: 'w-' + Date.now().toString(36), name: w.name || 'Imported world', objects: w.objects, conns: w.conns || [] };
+      persistWorlds([...worlds, nw]); loadWorld(nw);
+    };
+    r.readAsText(file);
+  };
+  const shareLink = () => {
+    const encoded = encodeWorld(worldPayload(worldName.trim() || 'Shared world', objects, conns));
+    const base = window.location.href.split('#')[0];
+    const url = base + '#world=' + encoded;
+    try { window.location.hash = 'world=' + encoded; } catch (e) {}
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).then(() => window.alert('Share link copied to clipboard.'), () => window.alert('Link is in the address bar — copy it to share.'));
+    } else { window.alert('Link is in the address bar — copy it to share.'); }
+  };
+  const exportImage = (fmt) => { if (svgRef.current) (fmt === 'png' ? exportPng(svgRef.current, '#09090b', 2, 'v2x-world.png') : exportSvg(svgRef.current, '#09090b', 'v2x-world.svg')); };
+
+  // persist UI state (snap / sim settings / last-open world) across reloads
+  useEffect(() => { lsSet('v2x_wb_prefs', { snap, dirMode, enabled, mapStore, activeId, worldName }); }, [snap, dirMode, enabled, mapStore, activeId, worldName]);
+  // load a world shared via URL hash on first mount
   useEffect(() => {
-    const h = (e) => { if ((e.key === 'Delete' || e.key === 'Backspace') && sel) { e.preventDefault(); removeSelected(); } };
+    const m = (window.location.hash || '').match(/world=([^&]+)/);
+    if (m) { const w = decodeWorld(m[1]); if (w) { setObjects(w.objects); setConns(w.conns || []); setWorldName(w.name || 'Shared world'); setActiveId(null); setSel(null); } }
+  }, []);
+
+  // keyboard: delete + undo/redo
+  useEffect(() => {
+    const h = (e) => {
+      const typing = /^(INPUT|TEXTAREA)$/.test((e.target && e.target.tagName) || '');
+      const meta = e.metaKey || e.ctrlKey;
+      if (meta && e.key.toLowerCase() === 'z') { e.preventDefault(); (e.shiftKey ? redo : undo)(); return; }
+      if (meta && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && sel && !typing) { e.preventDefault(); removeSelected(); }
+    };
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
-  }, [sel, removeSelected]);
+  }, [sel, removeSelected, undo, redo]);
 
   // "Simulate this world" — a looping clock that drives packets along every wired link.
   useEffect(() => {
@@ -453,12 +567,15 @@ function WorldBuilderTab() {
     const p = svgPoint(svgRef.current, e.clientX, e.clientY);
     if (drag.current) {
       const { id, ox, oy } = drag.current;
+      drag.current.moved = true;
       setObjects((prev) => prev.map((o) => o.id === id ? clampC({ ...o, x: snapV(p.x - ox), y: snapV(p.y - oy) }) : o));
     } else if (wiring) {
       setWiring({ ...wiring, x: p.x, y: p.y });
     }
   };
   const endInteraction = (e) => {
+    // a drag that actually moved is one undo step
+    if (drag.current && drag.current.moved) { const pre = drag.current.pre; setUndo((u) => [...u.slice(-49), pre]); setRedo([]); }
     if (wiring && svgRef.current) {
       const p = svgPoint(svgRef.current, e.clientX, e.clientY);
       // find nearest other device within grab radius
@@ -470,7 +587,7 @@ function WorldBuilderTab() {
       });
       if (best) {
         const exists = conns.some((c) => (c.from === wiring.from && c.to === best.id) || (c.from === best.id && c.to === wiring.from));
-        if (!exists) setConns((prev) => [...prev, { id: uid('c'), from: wiring.from, to: best.id }]);
+        if (!exists) { setUndo((u) => [...u.slice(-49), { objects, conns }]); setRedo([]); setConns((prev) => [...prev, { id: uid('c'), from: wiring.from, to: best.id }]); }
       }
     }
     drag.current = null;
@@ -481,7 +598,7 @@ function WorldBuilderTab() {
     e.stopPropagation();
     if (!svgRef.current) return;
     const p = svgPoint(svgRef.current, e.clientX, e.clientY);
-    drag.current = { id: o.id, ox: p.x - o.x, oy: p.y - o.y };
+    drag.current = { id: o.id, ox: p.x - o.x, oy: p.y - o.y, pre: { objects, conns }, moved: false };
     setSel({ kind: 'obj', id: o.id });
   };
   const startWire = (o, e) => {
@@ -529,6 +646,15 @@ function WorldBuilderTab() {
               ))}
             </div>
           ) : <p className="mt-2 text-[11px] text-slate-500">No saved worlds yet — build one, name it, and Save.</p>}
+
+          {/* portability */}
+          <div className="mt-2 flex items-center gap-1 text-[11px]">
+            <button onClick={exportWorld} title="Download this world as a .json file" className="rounded border border-zinc-700 px-2 py-1 text-slate-300 hover:border-zinc-500">⭳ Export</button>
+            <button onClick={() => fileRef.current && fileRef.current.click()} title="Load a world from a .json file" className="rounded border border-zinc-700 px-2 py-1 text-slate-300 hover:border-zinc-500">⭱ Import</button>
+            <button onClick={shareLink} title="Copy a shareable link" className="rounded border border-zinc-700 px-2 py-1 text-slate-300 hover:border-zinc-500">🔗 Share</button>
+            <input ref={fileRef} type="file" accept=".json,application/json" className="hidden"
+              onChange={(e) => { importWorld(e.target.files && e.target.files[0]); e.target.value = ''; }} />
+          </div>
         </div>
 
         <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-400 mb-2">Palette</h2>
@@ -562,8 +688,13 @@ function WorldBuilderTab() {
         <div className="absolute left-6 top-6 z-10 flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-950/80 px-3 py-1.5 text-[11px]">
           <span className="text-slate-400">{devices.length} device{devices.length !== 1 ? 's' : ''} · {conns.length} link{conns.length !== 1 ? 's' : ''}</span>
           <span className="text-zinc-700">|</span>
+          <button onClick={undo} disabled={!undoStack.length} title="Undo (⌘Z)" className={'rounded px-1.5 py-0.5 ' + (undoStack.length ? 'text-slate-300 hover:text-white' : 'text-slate-600 cursor-not-allowed')}>↶</button>
+          <button onClick={redo} disabled={!redoStack.length} title="Redo (⌘⇧Z)" className={'rounded px-1.5 py-0.5 ' + (redoStack.length ? 'text-slate-300 hover:text-white' : 'text-slate-600 cursor-not-allowed')}>↷</button>
+          <span className="text-zinc-700">|</span>
           <button onClick={() => setSnap((s) => !s)} className={'rounded px-2 py-0.5 ' + (snap ? 'bg-neon-cyan/20 text-neon-cyan' : 'text-slate-400 hover:text-white')}>Snap {snap ? 'on' : 'off'}</button>
-          <button onClick={() => { setObjects([]); setConns([]); setSel(null); setSim(false); }} className="rounded px-2 py-0.5 text-slate-400 hover:text-neon-red">Clear all</button>
+          <button onClick={() => exportImage('png')} title="Export canvas as PNG" className="rounded px-2 py-0.5 text-slate-400 hover:text-white">PNG</button>
+          <button onClick={() => exportImage('svg')} title="Export canvas as SVG" className="rounded px-2 py-0.5 text-slate-400 hover:text-white">SVG</button>
+          <button onClick={clearAll} className="rounded px-2 py-0.5 text-slate-400 hover:text-neon-red">Clear all</button>
           <span className="text-zinc-700">|</span>
           <button onClick={() => { if (conns.length) setSim((s) => !s); }} disabled={!conns.length}
             title={conns.length ? '' : 'Wire at least one link first'}
@@ -749,7 +880,7 @@ function WorldBuilderTab() {
                 <div className="space-y-1.5">
                   {MODELS[selObj.type].map((m) => (
                     <button key={m.id}
-                      onClick={() => setObjects((prev) => prev.map((o) => o.id === selObj.id ? { ...o, modelId: m.id } : o))}
+                      onClick={() => { pushUndo(); setObjects((prev) => prev.map((o) => o.id === selObj.id ? { ...o, modelId: m.id } : o)); }}
                       className={'w-full rounded-lg border px-3 py-2 text-left transition ' +
                         (selObj.modelId === m.id ? 'border-neon-cyan bg-neon-cyan/10' : 'border-zinc-700 bg-zinc-900/60 hover:border-zinc-500')}>
                       <div className="flex items-center justify-between">
@@ -766,7 +897,7 @@ function WorldBuilderTab() {
 
             <div className="flex gap-2 pt-1">
               <button
-                onClick={() => { const n = clampC({ ...selObj, id: uid(selObj.type), x: selObj.x + 40, y: selObj.y + 40 }); setObjects((p) => [...p, n]); setSel({ kind: 'obj', id: n.id }); }}
+                onClick={() => { pushUndo(); const n = clampC({ ...selObj, id: uid(selObj.type), x: selObj.x + 40, y: selObj.y + 40 }); setObjects((p) => [...p, n]); setSel({ kind: 'obj', id: n.id }); }}
                 className="flex-1 rounded-lg border border-zinc-700 px-3 py-2 text-sm text-slate-300 hover:border-zinc-500">Duplicate</button>
               <button onClick={removeSelected} className="flex-1 rounded-lg border border-red-700/60 bg-red-500/10 px-3 py-2 text-sm text-red-300 hover:bg-red-500/20">Delete</button>
             </div>
@@ -1862,7 +1993,8 @@ const TABS = [
 ];
 
 function App() {
-  const [tab, setTab] = useState('builder');
+  const [tab, setTab] = useState(() => lsGet('v2x_tab', 'builder'));
+  useEffect(() => { lsSet('v2x_tab', tab); }, [tab]);
   return (
     <div className="h-screen flex flex-col bg-zinc-950">
       <header className="shrink-0 border-b border-zinc-800 bg-zinc-950/80 backdrop-blur">
