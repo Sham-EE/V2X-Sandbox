@@ -553,13 +553,32 @@ const G = {
   ewStop: 350, nsStop: 340,
   rsu: { x: 560, y: 150 }, tc: { x: 636, y: 150 },
   ewHead: { x: 356, y: 150 }, nsHead: { x: 520, y: 336 },
+  tower: { x: 812, y: 118 }, cloud: { x: 700, y: 66 },
 };
+
+// Communication categories the Use Cases are grouped by (who talks to whom).
+const CATEGORIES = [
+  { id: 'V2I', label: 'V2I', name: 'Vehicle → Infrastructure', desc: 'Vehicles ↔ roadside signals & controllers' },
+  { id: 'V2V', label: 'V2V', name: 'Vehicle → Vehicle', desc: 'Vehicles talk directly to each other' },
+  { id: 'V2P', label: 'V2P', name: 'Vehicle → Pedestrian', desc: 'Vehicles ↔ vulnerable road users (VRUs)' },
+  { id: 'V2N', label: 'V2N', name: 'Vehicle → Network', desc: 'Vehicles ↔ cloud / TMC over cellular' },
+];
 
 function lightColor(state) { return state === 'green' ? TONE.green : state === 'yellow' ? TONE.amber : TONE.red; }
 
 function MiniScene({ frame }) {
   const f = frame;
-  const head = (pos, color, vertical) => (
+  const layout = f.layout || 'cross';       // 'cross' | 'straightH'
+  const infra = f.infra || 'signals';       // 'signals' | 'tower' | 'none'
+  const ewMid = (G.ewY0 + G.ewY1) / 2;
+
+  // Concentric fading rings used for any wireless broadcast (RSU, car, ped, tower).
+  const broadcast = (cx, cy, color, animate) => [0, 1, 2].map((k) => (
+    <circle key={cx + '-' + cy + '-' + k} cx={cx} cy={cy} r={15 + k * 11} fill="none" stroke={color} strokeWidth="2"
+      opacity="0.5" className={animate ? 'radiowave' : ''} style={{ animationDelay: k * 0.35 + 's' }} />
+  ));
+
+  const head = (pos, color) => (
     <g transform={`translate(${pos.x},${pos.y})`}>
       <rect x="-12" y="-30" width="24" height="60" rx="5" className="fill-zinc-950 stroke-zinc-600" />
       <circle cx="0" cy="-16" r="6" fill={color === TONE.red ? TONE.red : '#3f1d1d'} className={color === TONE.red ? 'glow-red' : ''} />
@@ -567,22 +586,68 @@ function MiniScene({ frame }) {
       <circle cx="0" cy="16" r="6" fill={color === TONE.green ? TONE.green : '#173f2a'} className={color === TONE.green ? 'glow-green' : ''} />
     </g>
   );
+
   const vehicle = (c) => {
     const h = c.or === 'h';
-    const w = h ? 72 : 44, ht = h ? 42 : 78;
-    const body = c.kind === 'ambulance' ? '#f1f5f9' : '#1d4ed8';
-    const stroke = c.alert ? TONE.red : (c.kind === 'ambulance' ? '#ef4444' : '#93c5fd');
+    const kind = c.kind || 'car';
+    let w, ht, body;
+    if (kind === 'truck') { w = h ? 118 : 48; ht = h ? 46 : 118; body = '#3f3f46'; }
+    else if (kind === 'bus') { w = h ? 104 : 46; ht = h ? 44 : 104; body = '#0d9488'; }
+    else if (kind === 'train') { w = h ? 220 : 54; ht = h ? 54 : 220; body = '#111827'; }
+    else { w = h ? 72 : 44; ht = h ? 42 : 78; body = kind === 'ambulance' ? '#f1f5f9' : '#1d4ed8'; }
+    const stroke = c.alert ? TONE.red : (kind === 'ambulance' ? '#ef4444' : kind === 'truck' ? '#a1a1aa' : kind === 'bus' ? '#5eead4' : kind === 'train' ? '#9ca3af' : '#93c5fd');
     return (
-      <g key={c.id} transform={`translate(${c.x},${c.y})`} className={c.alert ? 'crashflash' : ''}>
-        <rect x={-w / 2} y={-ht / 2} width={w} height={ht} rx="13" fill={body} stroke={stroke} strokeWidth="2.5" />
-        {c.kind === 'ambulance' && <rect x={-w / 2} y="-4" width={w} height="8" fill="#ef4444" />}
-        {c.kind === 'ambulance' && <><rect x="-9" y={-ht / 2 - 6} width="7" height="6" fill="#ef4444" /><rect x="2" y={-ht / 2 - 6} width="7" height="6" fill="#3b82f6" /></>}
-        {h ? <rect x={w / 2 - 16} y={-ht / 2 + 6} width="12" height={ht - 12} rx="4" className="fill-cyan-200/70" />
-           : <rect x={-w / 2 + 6} y={-ht / 2 + 6} width={w - 12} height="14" rx="4" className="fill-cyan-200/70" />}
-        {c.label && <text x="0" y="4" textAnchor="middle" className="fill-zinc-900 text-[10px] font-bold">{c.label}</text>}
+      <g key={c.id} transform={`translate(${c.x},${c.y})`}>
+        {c.broadcasting && broadcast(0, 0, '#34d399', f.waves)}
+        {kind === 'bike' ? (
+          <g className={c.alert ? 'crashflash' : ''}>
+            {h ? <><circle cx="-11" cy="6" r="7" fill="none" stroke="#67e8f9" strokeWidth="2.5" /><circle cx="11" cy="6" r="7" fill="none" stroke="#67e8f9" strokeWidth="2.5" /><line x1="-11" y1="6" x2="4" y2="6" stroke="#0ea5e9" strokeWidth="2.5" /></>
+               : <><circle cx="0" cy="-11" r="7" fill="none" stroke="#67e8f9" strokeWidth="2.5" /><circle cx="0" cy="11" r="7" fill="none" stroke="#67e8f9" strokeWidth="2.5" /><line x1="0" y1="-11" x2="0" y2="4" stroke="#0ea5e9" strokeWidth="2.5" /></>}
+            <circle cx="0" cy={h ? -8 : -4} r="5" fill="#0ea5e9" />
+          </g>
+        ) : (
+          <g className={c.alert ? 'crashflash' : ''}>
+            <rect x={-w / 2} y={-ht / 2} width={w} height={ht} rx={kind === 'truck' || kind === 'train' ? 6 : 13} fill={body} stroke={stroke} strokeWidth="2.5" />
+            {kind === 'ambulance' && <rect x={-w / 2} y="-4" width={w} height="8" fill="#ef4444" />}
+            {kind === 'ambulance' && <><rect x="-9" y={-ht / 2 - 6} width="7" height="6" fill="#ef4444" /><rect x="2" y={-ht / 2 - 6} width="7" height="6" fill="#3b82f6" /></>}
+            {kind === 'train' && <rect x={-w / 2} y={ht / 2 - 9} width={w} height="9" fill="#f59e0b" />}
+            {kind === 'train' && [0, 1, 2, 3].map((k) => <rect key={k} x="-9" y={-ht / 2 + 22 + k * 44} width="18" height="24" rx="3" className="fill-cyan-200/60" />)}
+            {kind !== 'train' && (h ? <rect x={w / 2 - 16} y={-ht / 2 + 6} width="12" height={ht - 12} rx="4" className="fill-cyan-200/70" />
+               : <rect x={-w / 2 + 6} y={-ht / 2 + 6} width={w - 12} height="14" rx="4" className="fill-cyan-200/70" />)}
+            {c.label && <text x="0" y="4" textAnchor="middle" className={(kind === 'ambulance' ? 'fill-zinc-900' : 'fill-white') + ' text-[10px] font-bold'}>{c.label}</text>}
+          </g>
+        )}
+        {c.alert && <text x="0" y={-ht / 2 - 10} textAnchor="middle" className="text-[15px]">⚠️</text>}
       </g>
     );
   };
+
+  const pedFig = (p) => (
+    <g transform={`translate(${p.x},${p.y})`}>
+      {p.broadcasting && broadcast(0, -8, '#fbbf24', f.waves)}
+      <g className={p.alert ? 'crashflash' : ''}>
+        <circle cx="0" cy="-16" r="6" className="fill-none stroke-amber-300" strokeWidth="2.5" />
+        <line x1="0" y1="-10" x2="0" y2="6" className="stroke-amber-300" strokeWidth="2.5" />
+        <line x1="0" y1="-4" x2="-8" y2="3" className="stroke-amber-300" strokeWidth="2.5" />
+        <line x1="0" y1="-4" x2="8" y2="3" className="stroke-amber-300" strokeWidth="2.5" />
+        <line x1="0" y1="6" x2="-7" y2="18" className="stroke-amber-300" strokeWidth="2.5" />
+        <line x1="0" y1="6" x2="7" y2="18" className="stroke-amber-300" strokeWidth="2.5" />
+      </g>
+    </g>
+  );
+
+  const hazardMark = (hz) => (hz.kind === 'ice' ? (
+    <g>
+      <ellipse cx={hz.x} cy={G.ewLaneY + 6} rx="48" ry="26" fill="#7dd3fc44" stroke="#7dd3fc" strokeDasharray="4 4" />
+      <text x={hz.x} y={G.ewY0 - 8} textAnchor="middle" className="fill-sky-200 text-[12px] font-bold">{hz.label}</text>
+    </g>
+  ) : (
+    <g>
+      {[0, 1, 2, 3].map((k) => <path key={k} d={`M ${hz.x - 30 + k * 20} ${G.ewLaneY + 16} l -5 15 l 10 0 z`} fill="#f59e0b" stroke="#fff" strokeWidth="1" />)}
+      <rect x={hz.x - 28} y={G.ewY0 - 34} width="56" height="24" rx="4" fill="#f59e0b" />
+      <text x={hz.x} y={G.ewY0 - 17} textAnchor="middle" className="fill-zinc-900 text-[9px] font-bold">{hz.label}</text>
+    </g>
+  ));
 
   return (
     <svg viewBox={`0 0 ${MS.w} ${MS.h}`} className="w-full h-full">
@@ -590,31 +655,72 @@ function MiniScene({ frame }) {
         <pattern id="grid2" width="30" height="30" patternUnits="userSpaceOnUse"><path d="M30 0H0V30" fill="none" stroke="#1e293b" strokeWidth="1" /></pattern>
       </defs>
       <rect width={MS.w} height={MS.h} fill="url(#grid2)" />
-      {/* roads */}
+
+      {/* ---------- roads ---------- */}
       <rect x="0" y={G.ewY0} width={MS.w} height={G.ewY1 - G.ewY0} className="fill-zinc-800" />
-      <rect x={G.nsX0} y="0" width={G.nsX1 - G.nsX0} height={MS.h} className="fill-zinc-800" />
-      <line x1="0" y1={(G.ewY0 + G.ewY1) / 2} x2={MS.w} y2={(G.ewY0 + G.ewY1) / 2} strokeDasharray="20 16" className="stroke-yellow-500/60" strokeWidth="2" />
-      <line x1={(G.nsX0 + G.nsX1) / 2} y1="0" x2={(G.nsX0 + G.nsX1) / 2} y2={MS.h} strokeDasharray="20 16" className="stroke-yellow-500/60" strokeWidth="2" />
-      {/* stop bars */}
-      <rect x={G.ewStop + 18} y={G.ewY0} width="6" height={(G.ewY1 - G.ewY0) / 2} className="fill-white/80" />
-      <rect x={(G.nsX0 + G.nsX1) / 2} y={G.nsStop - 24} width={(G.nsX1 - G.nsX0) / 2} height="6" className="fill-white/80" />
-
-      {/* pole + RSU + TC cabinet */}
-      <line x1={G.rsu.x} y1="200" x2={G.rsu.x} y2={G.ewY0 - 8} className="stroke-zinc-600" strokeWidth="6" />
-      <rect x={G.tc.x - 22} y={G.tc.y - 26} width="44" height="64" rx="5" className="fill-zinc-700 stroke-zinc-500" />
-      <text x={G.tc.x} y={G.tc.y + 4} textAnchor="middle" className="fill-neon-green text-[10px] font-bold">TC</text>
-      <line x1={G.rsu.x + 26} y1={G.rsu.y} x2={G.tc.x - 22} y2={G.tc.y} className="stroke-pink-400" strokeWidth="2" />
-      {/* radio waves */}
-      {f.rsuActive && [0, 1, 2].map((k) => (
-        <path key={k} d={`M ${G.rsu.x - 6} ${G.rsu.y + 14} A ${30 + k * 18} ${30 + k * 18} 0 0 0 ${G.rsu.x - 36 - k * 12} ${G.rsu.y + 40 + k * 14}`}
-          fill="none" stroke="#a78bfa" strokeWidth="2.5" className={f.waves ? 'radiowave' : ''} style={{ animationDelay: k * 0.4 + 's' }} opacity="0.8" />
+      <line x1="0" y1={ewMid} x2={MS.w} y2={ewMid} strokeDasharray="20 16" className="stroke-yellow-500/60" strokeWidth="2" />
+      {layout === 'cross' && (
+        <>
+          {!f.rail && <rect x={G.nsX0} y="0" width={G.nsX1 - G.nsX0} height={MS.h} className="fill-zinc-800" />}
+          {!f.rail && <line x1={(G.nsX0 + G.nsX1) / 2} y1="0" x2={(G.nsX0 + G.nsX1) / 2} y2={MS.h} strokeDasharray="20 16" className="stroke-yellow-500/60" strokeWidth="2" />}
+          {f.rail && (
+            <g>
+              {Array.from({ length: 18 }).map((_, k) => <rect key={k} x="430" y={k * 30} width="40" height="9" className="fill-amber-900/70" />)}
+              <line x1="439" y1="0" x2="439" y2={MS.h} className="stroke-zinc-400" strokeWidth="3" />
+              <line x1="461" y1="0" x2="461" y2={MS.h} className="stroke-zinc-400" strokeWidth="3" />
+            </g>
+          )}
+          <rect x={G.ewStop + 18} y={G.ewY0} width="6" height={(G.ewY1 - G.ewY0) / 2} className="fill-white/80" />
+          {!f.rail && <rect x={(G.nsX0 + G.nsX1) / 2} y={G.nsStop - 24} width={(G.nsX1 - G.nsX0) / 2} height="6" className="fill-white/80" />}
+        </>
+      )}
+      {layout !== 'cross' && f.crosswalk != null && [0, 1, 2, 3, 4].map((k) => (
+        <rect key={k} x={f.crosswalk - 24 + k * 11} y={G.ewY0 + 4} width="7" height={G.ewY1 - G.ewY0 - 8} className="fill-white/30" />
       ))}
-      <rect x={G.rsu.x - 26} y={G.rsu.y - 15} width="52" height="30" rx="6" className="fill-emerald-500/20 stroke-neon-green" />
-      <text x={G.rsu.x} y={G.rsu.y + 4} textAnchor="middle" className="fill-neon-green text-[10px] font-bold">RSU</text>
 
-      {/* signal heads */}
-      {head(G.ewHead, lightColor(f.ew), false)}
-      {head(G.nsHead, lightColor(f.ns), true)}
+      {/* corner buildings (occlusion) */}
+      {layout === 'cross' && f.buildings && [[248, 60], [560, 60], [248, 328], [560, 328]].map(([bx, by], i) => (
+        <rect key={i} x={bx} y={by} width="118" height="118" rx="8" className="fill-zinc-800 stroke-zinc-700" />
+      ))}
+
+      {/* ---------- infrastructure ---------- */}
+      {infra === 'signals' && (
+        <g>
+          <line x1={G.rsu.x} y1="200" x2={G.rsu.x} y2={G.ewY0 - 8} className="stroke-zinc-600" strokeWidth="6" />
+          <rect x={G.tc.x - 22} y={G.tc.y - 26} width="44" height="64" rx="5" className="fill-zinc-700 stroke-zinc-500" />
+          <text x={G.tc.x} y={G.tc.y + 4} textAnchor="middle" className="fill-neon-green text-[10px] font-bold">TC</text>
+          <line x1={G.rsu.x + 26} y1={G.rsu.y} x2={G.tc.x - 22} y2={G.tc.y} className="stroke-pink-400" strokeWidth="2" />
+          {f.waves && broadcast(G.rsu.x, G.rsu.y, '#a78bfa', true)}
+          <rect x={G.rsu.x - 26} y={G.rsu.y - 15} width="52" height="30" rx="6" className="fill-emerald-500/20 stroke-neon-green" />
+          <text x={G.rsu.x} y={G.rsu.y + 4} textAnchor="middle" className="fill-neon-green text-[10px] font-bold">RSU</text>
+          {head(G.ewHead, lightColor(f.ew))}
+          {head(G.nsHead, lightColor(f.ns))}
+        </g>
+      )}
+      {infra === 'tower' && (
+        <g>
+          <line x1={G.cloud.x + 6} y1={G.cloud.y + 6} x2={G.tower.x} y2={G.tower.y - 14} className="stroke-violet-400/60" strokeDasharray="4 5" strokeWidth="2" />
+          <g transform={`translate(${G.cloud.x},${G.cloud.y})`}>
+            <ellipse cx="-16" cy="6" rx="18" ry="14" className="fill-zinc-700" />
+            <ellipse cx="12" cy="6" rx="20" ry="16" className="fill-zinc-700" />
+            <ellipse cx="-2" cy="-8" rx="18" ry="15" className="fill-zinc-700" />
+            <text x="-2" y="10" textAnchor="middle" className="fill-slate-300 text-[9px] font-bold">TMC · Cloud</text>
+          </g>
+          <g transform={`translate(${G.tower.x},${G.tower.y})`}>
+            <line x1="-16" y1="72" x2="0" y2="0" className="stroke-zinc-400" strokeWidth="3" />
+            <line x1="16" y1="72" x2="0" y2="0" className="stroke-zinc-400" strokeWidth="3" />
+            <line x1="-10" y1="46" x2="10" y2="46" className="stroke-zinc-400" strokeWidth="2" />
+            <line x1="0" y1="0" x2="0" y2="-14" className="stroke-zinc-300" strokeWidth="2" />
+          </g>
+          {f.waves && broadcast(G.tower.x, G.tower.y - 8, '#a78bfa', true)}
+        </g>
+      )}
+
+      {/* hazards */}
+      {f.hazard && hazardMark(f.hazard)}
+
+      {/* pedestrian / VRU */}
+      {f.ped && pedFig(f.ped)}
 
       {/* vehicles */}
       {f.cars.map(vehicle)}
@@ -632,7 +738,7 @@ function MiniScene({ frame }) {
 
 const SCENARIOS = [
   {
-    id: 'srm', icon: '🚑', title: 'Emergency Vehicle Preemption', tagline: 'SRM → green for the ambulance',
+    id: 'srm', category: 'V2I', icon: '🚑', title: 'Emergency Vehicle Preemption', tagline: 'SRM → green for the ambulance',
     duration: 11,
     why: 'An emergency vehicle’s OBU asks the intersection for priority using a Signal Request Message (SRM). The RSU relays it to the controller, which preempts the signal to green and confirms with an SSM — the ambulance never has to stop or run a red.',
     messages: ['SRM', 'SSM', 'SPaT'],
@@ -653,7 +759,7 @@ const SCENARIOS = [
     },
   },
   {
-    id: 'rlvw', icon: '⚠️', title: 'Red-Light Violation Warning', tagline: 'ADAS predicts the driver can’t stop in time',
+    id: 'rlvw', category: 'V2I', icon: '⚠️', title: 'Red-Light Violation Warning', tagline: 'ADAS predicts the driver can’t stop in time',
     duration: 9,
     why: 'Using SPaT (time-to-red) and MAP (distance to the stop bar), the vehicle’s ADAS computes whether it can stop. If it predicts the car would cross after the light turns red, it warns the driver — and here, auto-brakes to stop at the bar.',
     messages: ['SPaT', 'MAP', 'RLVW'],
@@ -673,7 +779,7 @@ const SCENARIOS = [
     },
   },
   {
-    id: 'detect', icon: '🎯', title: 'V2X Actuated Detection', tagline: 'BSM replaces loops & cameras',
+    id: 'detect', category: 'V2I', icon: '🎯', title: 'V2X Actuated Detection', tagline: 'BSM replaces loops & cameras',
     duration: 9,
     why: 'A vehicle waiting on the side street would normally need an inductive loop or camera to be noticed. Instead its OBU’s BSM travels to the RSU and up to the controller, which detects the vehicle in the lane and serves it a green sooner.',
     messages: ['BSM', 'SPaT'],
@@ -695,7 +801,7 @@ const SCENARIOS = [
     },
   },
   {
-    id: 'glosa', icon: '🌊', title: 'GLOSA — Green-Wave Advisory', tagline: 'Advised speed to catch the green',
+    id: 'glosa', category: 'V2I', icon: '🌊', title: 'GLOSA — Green-Wave Advisory', tagline: 'Advised speed to catch the green',
     duration: 9,
     why: 'Green Light Optimal Speed Advisory uses SPaT to tell the driver the exact speed to arrive as the light turns green — eliminating a full stop, cutting idle time, emissions and fuel.',
     messages: ['SPaT', 'MAP'],
@@ -711,6 +817,354 @@ const SCENARIOS = [
       else if (t < 5.2) banner = { text: 'Cruising at the advised speed…', tone: 'info' };
       else banner = { text: 'Arrived exactly as it turned green — zero idle time', tone: 'ok' };
       return { cars, packets, ew: green ? 'green' : 'red', ns: green ? 'red' : 'green', banner, rsuActive: true, waves: t >= 1.5 && t < 3.5 };
+    },
+  },
+
+  /* ---------------- V2V — Vehicle-to-Vehicle ---------------- */
+  {
+    id: 'fcw', category: 'V2V', icon: '🚗', title: 'Forward Collision Warning', tagline: 'The lead car brakes hard — you’re warned',
+    duration: 8,
+    why: 'The lead vehicle continuously broadcasts its state (BSM). When it brakes hard, the following vehicle’s ADAS sees the deceleration in that BSM and warns the driver — then auto-brakes to keep a safe gap. No forward camera or radar required.',
+    messages: ['BSM', 'FCW'],
+    frame(t) {
+      const lx = t < 3 ? lerp(300, 540, seg(t, 0, 3)) : (t < 4.5 ? lerp(540, 600, easeOut(seg(t, 3, 4.5))) : 600);
+      const ex = t < 3.5 ? lerp(90, 360, seg(t, 0, 3.5)) : (t < 5.5 ? lerp(360, 500, easeOut(seg(t, 3.5, 5.5))) : 500);
+      const braking = t >= 3;
+      const warn = t >= 3.4 && t < 5.6;
+      const cars = [
+        { id: 'lead', x: lx, y: G.ewLaneY, or: 'h', kind: 'car', label: 'LEAD', broadcasting: braking },
+        { id: 'ego', x: ex, y: G.ewLaneY, or: 'h', kind: 'car', label: 'EGO', alert: warn },
+      ];
+      const packets = []; let banner;
+      if (t < 3) banner = { text: 'Following a lead vehicle at speed', tone: 'info' };
+      else if (t < 4) { packets.push({ ...lerpPt({ x: lx, y: G.ewLaneY }, { x: ex, y: G.ewLaneY }, seg(t, 3, 4)), label: 'BSM', tone: TONE.green }); banner = { text: 'Lead brakes hard → its BSM reports rapid deceleration', tone: 'warn' }; }
+      else if (t < 5.6) banner = { text: '⚠ FORWARD COLLISION WARNING — ego auto-brakes', tone: 'warn' };
+      else banner = { text: 'Safe following gap kept — rear-end collision avoided', tone: 'ok' };
+      return { layout: 'straightH', infra: 'none', cars, packets, banner, waves: braking && t < 5.6 };
+    },
+  },
+  {
+    id: 'eebl', category: 'V2V', icon: '🛑', title: 'Emergency Electronic Brake Light', tagline: 'Braking beyond your line of sight',
+    duration: 8,
+    why: 'A vehicle two cars ahead — hidden behind a truck — brakes hard. Its EEBL/BSM reaches you directly over V2V, so you are warned before you could ever see a brake light.',
+    messages: ['BSM', 'EEBL'],
+    frame(t) {
+      const fx = t < 2.5 ? lerp(430, 560, seg(t, 0, 2.5)) : (t < 4 ? lerp(560, 610, easeOut(seg(t, 2.5, 4))) : 610);
+      const tx = t < 3.5 ? lerp(240, 470, seg(t, 0, 3.5)) : (t < 5 ? lerp(470, 500, easeOut(seg(t, 3.5, 5))) : 500);
+      const ex = t < 3.8 ? lerp(50, 300, seg(t, 0, 3.8)) : (t < 5.6 ? lerp(300, 400, easeOut(seg(t, 3.8, 5.6))) : 400);
+      const braking = t >= 2.5;
+      const warn = t >= 3.2 && t < 5.8;
+      const cars = [
+        { id: 'front', x: fx, y: G.ewLaneY, or: 'h', kind: 'car', broadcasting: braking },
+        { id: 'truck', x: tx, y: G.ewLaneY, or: 'h', kind: 'truck', label: 'TRUCK' },
+        { id: 'ego', x: ex, y: G.ewLaneY, or: 'h', kind: 'car', label: 'EGO', alert: warn },
+      ];
+      const packets = []; let banner;
+      if (t < 2.5) banner = { text: 'A heavy truck ahead blocks your view of traffic', tone: 'info' };
+      else if (t < 3.8) { packets.push({ ...lerpPt({ x: fx, y: G.ewLaneY - 30 }, { x: ex, y: G.ewLaneY - 30 }, seg(t, 2.5, 3.8)), label: 'EEBL', tone: TONE.green }); banner = { text: 'Hidden vehicle brakes hard → EEBL sent over V2V', tone: 'warn' }; }
+      else if (t < 5.8) banner = { text: '⚠ EMERGENCY BRAKING AHEAD — slow down now', tone: 'warn' };
+      else banner = { text: 'Warned beyond line of sight — unique to V2V', tone: 'ok' };
+      return { layout: 'straightH', infra: 'none', cars, packets, banner, waves: braking && t < 5.8 };
+    },
+  },
+  {
+    id: 'ima', category: 'V2V', icon: '✚', title: 'Intersection Movement Assist', tagline: 'Cross traffic you can’t see',
+    duration: 8,
+    why: 'Two vehicles approach an intersection on crossing paths, their view blocked by corner buildings. Exchanging BSMs, each computes the collision risk — the ego brakes before entering, avoiding a side impact.',
+    messages: ['BSM', 'IMA'],
+    frame(t) {
+      const ex = t < 3.2 ? lerp(-40, 300, seg(t, 0, 3.2)) : (t < 5 ? lerp(300, G.ewStop, easeOut(seg(t, 3.2, 5))) : G.ewStop);
+      const cy = lerp(-40, 560, seg(t, 2, 8));
+      const warn = t >= 3 && t < 5.2;
+      const cars = [
+        { id: 'ego', x: ex, y: G.ewLaneY, or: 'h', kind: 'car', label: 'EGO', alert: warn, broadcasting: true },
+        { id: 'cross', x: 428, y: cy, or: 'v', kind: 'car', broadcasting: true },
+      ];
+      const packets = []; let banner;
+      if (t < 2) banner = { text: 'Approaching an intersection — corners blocked by buildings', tone: 'info' };
+      else if (t < 3) { packets.push({ ...lerpPt({ x: 428, y: cy }, { x: ex, y: G.ewLaneY }, seg(t, 2, 3)), label: 'BSM', tone: TONE.green }); banner = { text: 'Vehicles exchange BSMs through the blind corner', tone: 'info' }; }
+      else if (t < 5.2) banner = { text: '⚠ INTERSECTION MOVEMENT ASSIST — cross vehicle detected, braking', tone: 'warn' };
+      else banner = { text: 'Ego stopped short — side collision avoided', tone: 'ok' };
+      return { layout: 'cross', infra: 'none', buildings: true, cars, packets, banner, waves: t >= 2 && t < 5.2 };
+    },
+  },
+
+  /* ---------------- V2P — Vehicle-to-Pedestrian ---------------- */
+  {
+    id: 'pcw', category: 'V2P', icon: '🚶', title: 'Pedestrian Crossing Warning', tagline: 'PSM from a phone in the crosswalk',
+    duration: 8,
+    why: 'A pedestrian steps into a mid-block crosswalk. Their smartphone / VRU device broadcasts a PSM. The approaching vehicle receives it and yields — even at night or around a visual obstruction.',
+    messages: ['PSM'],
+    frame(t) {
+      const cx = 500;
+      const ex = t < 3.4 ? lerp(-40, 300, seg(t, 0, 3.4)) : (t < 5.2 ? lerp(300, 420, easeOut(seg(t, 3.4, 5.2))) : 420);
+      const py = t < 1.5 ? 360 : lerp(360, 188, seg(t, 1.5, 7));
+      const warn = t >= 2.6 && t < 5.4;
+      const cars = [{ id: 'ego', x: ex, y: G.ewLaneY, or: 'h', kind: 'car', label: 'EGO', alert: warn }];
+      const ped = { x: cx, y: py, broadcasting: true };
+      const packets = []; let banner;
+      if (t < 1.5) banner = { text: 'Vehicle approaches a crosswalk', tone: 'info' };
+      else if (t < 2.6) { packets.push({ ...lerpPt({ x: cx, y: py }, { x: ex, y: G.ewLaneY }, seg(t, 1.5, 2.6)), label: 'PSM', tone: TONE.amber }); banner = { text: 'Pedestrian steps off the curb → device broadcasts a PSM', tone: 'warn' }; }
+      else if (t < 5.4) banner = { text: '⚠ PEDESTRIAN IN CROSSWALK — vehicle yields', tone: 'warn' };
+      else banner = { text: 'Pedestrian crosses safely', tone: 'ok' };
+      return { layout: 'straightH', infra: 'none', crosswalk: cx, cars, packets, ped, banner, waves: t >= 1.5 && t < 5.4 };
+    },
+  },
+  {
+    id: 'bsw', category: 'V2P', icon: '🚲', title: 'Cyclist / VRU Awareness', tagline: 'A cyclist in your blind spot',
+    duration: 8,
+    why: 'A cyclist in the bike lane broadcasts a PSM. As the vehicle prepares to turn across the bike lane, the PSM warns the driver of the cyclist it cannot see — preventing a “right-hook” collision.',
+    messages: ['PSM'],
+    frame(t) {
+      const ex = t < 4 ? lerp(20, 300, seg(t, 0, 4)) : (t < 5.6 ? lerp(300, 360, easeOut(seg(t, 4, 5.6))) : 360);
+      const bx = lerp(120, 520, seg(t, 0, 8));
+      const warn = t >= 3 && t < 5.6;
+      const cars = [
+        { id: 'ego', x: ex, y: 250, or: 'h', kind: 'car', label: 'EGO', alert: warn },
+        { id: 'bike', x: bx, y: 292, or: 'h', kind: 'bike', broadcasting: true },
+      ];
+      const packets = []; let banner;
+      if (t < 2) banner = { text: 'A cyclist rides in the bike lane ahead-right', tone: 'info' };
+      else if (t < 3) { packets.push({ ...lerpPt({ x: bx, y: 292 }, { x: ex, y: 250 }, seg(t, 2, 3)), label: 'PSM', tone: TONE.amber }); banner = { text: 'The cyclist’s device broadcasts a PSM', tone: 'info' }; }
+      else if (t < 5.6) banner = { text: '⚠ CYCLIST ALONGSIDE — hold your turn', tone: 'warn' };
+      else banner = { text: 'Right-hook collision avoided', tone: 'ok' };
+      return { layout: 'straightH', infra: 'none', cars, packets, banner, waves: t >= 2 && t < 5.6 };
+    },
+  },
+
+  /* ---------------- V2N — Vehicle-to-Network ---------------- */
+  {
+    id: 'rszw', category: 'V2N', icon: '🚧', title: 'Work-Zone Speed Warning', tagline: 'TIM pushed over the cellular network',
+    duration: 8,
+    why: 'A work zone out of sight is registered in the Traffic Management Center. It pushes a TIM (Traveler Information Message) over the cellular network to approaching vehicles, which slow to the advised speed before reaching the workers.',
+    messages: ['TIM'],
+    frame(t) {
+      const ex = t < 3.5 ? lerp(-40, 330, seg(t, 0, 3.5)) : (t < 5.5 ? lerp(330, 470, easeOut(seg(t, 3.5, 5.5))) : lerp(470, 900, seg(t, 5.5, 8)));
+      const cars = [{ id: 'ego', x: ex, y: G.ewLaneY, or: 'h', kind: 'car', label: 'EGO', alert: t >= 3.4 && t < 5.5 }];
+      const packets = []; let banner;
+      if (t < 1.5) banner = { text: 'A work zone lies ahead, still out of sight', tone: 'info' };
+      else if (t < 3.2) { packets.push({ ...lerpPt({ x: G.tower.x, y: G.tower.y }, { x: ex, y: G.ewLaneY }, seg(t, 1.5, 3.2)), label: 'TIM', tone: TONE.violet }); banner = { text: 'Traffic Mgmt Center pushes a TIM over the cellular network', tone: 'info' }; }
+      else if (t < 5.5) banner = { text: 'Advisory: reduce to 45 km/h through the zone', tone: 'warn', sub: 'work zone in ~300 m' };
+      else banner = { text: 'Slowed safely before the workers', tone: 'ok' };
+      return { layout: 'straightH', infra: 'tower', cars, packets, hazard: { x: 662, kind: 'workzone', label: 'WORK' }, banner, waves: t >= 1.5 && t < 3.2 };
+    },
+  },
+  {
+    id: 'weather', category: 'V2N', icon: '❄️', title: 'Road-Weather Hazard', tagline: 'Black-ice alert from the network',
+    duration: 8,
+    why: 'Connected vehicles and sensors report black ice; the network aggregates it and delivers a road-weather TIM to vehicles upstream, which reduce speed before hitting the slippery patch.',
+    messages: ['TIM'],
+    frame(t) {
+      const ex = t < 3.5 ? lerp(-40, 320, seg(t, 0, 3.5)) : (t < 5.5 ? lerp(320, 470, easeOut(seg(t, 3.5, 5.5))) : lerp(470, 900, seg(t, 5.5, 8)));
+      const cars = [{ id: 'ego', x: ex, y: G.ewLaneY, or: 'h', kind: 'car', label: 'EGO', alert: t >= 3.4 && t < 5.5 }];
+      const packets = []; let banner;
+      if (t < 1.5) banner = { text: 'Black ice reported ahead by connected vehicles', tone: 'info' };
+      else if (t < 3.2) { packets.push({ ...lerpPt({ x: G.tower.x, y: G.tower.y }, { x: ex, y: G.ewLaneY }, seg(t, 1.5, 3.2)), label: 'TIM', tone: TONE.violet }); banner = { text: 'Network delivers a road-weather TIM', tone: 'info' }; }
+      else if (t < 5.5) banner = { text: '⚠ REDUCE SPEED — slippery road ahead', tone: 'warn' };
+      else banner = { text: 'Driver slowed before the hazard', tone: 'ok' };
+      return { layout: 'straightH', infra: 'tower', cars, packets, hazard: { x: 662, kind: 'ice', label: '❄ ICE' }, banner, waves: t >= 1.5 && t < 3.2 };
+    },
+  },
+
+  /* ---------------- more V2I ---------------- */
+  {
+    id: 'tsp', category: 'V2I', icon: '🚌', title: 'Transit Signal Priority', tagline: 'Late bus earns a green extension',
+    duration: 10,
+    why: 'A behind-schedule bus sends an SRM requesting priority. Unlike full emergency preemption, the controller simply EXTENDS the current green (or trims the red) so the bus clears without stopping — improving on-time performance without disrupting the whole cycle.',
+    messages: ['SRM', 'SSM', 'SPaT'],
+    frame(t) {
+      const bx = lerp(-40, 980, seg(t, 0, 10));
+      const cars = [{ id: 'bus', x: bx, y: G.ewLaneY, or: 'h', kind: 'bus', label: 'BUS' }];
+      const packets = []; let banner;
+      if (t < 2) banner = { text: 'A late transit bus approaches — the green is about to end', tone: 'info' };
+      else if (t < 3.4) { packets.push({ ...lerpPt({ x: bx, y: G.ewLaneY }, G.rsu, seg(t, 2, 3.4)), label: 'SRM', tone: TONE.cyan }); banner = { text: 'Bus sends an SRM requesting priority', tone: 'info' }; }
+      else if (t < 4.6) { packets.push({ ...lerpPt(G.rsu, G.tc, seg(t, 3.4, 4.6)), label: 'SRM', tone: TONE.cyan }); banner = { text: 'RSU relays the request → controller extends the green', tone: 'info' }; }
+      else if (t < 5.8) { packets.push({ ...lerpPt(G.tc, { x: bx, y: G.ewLaneY }, seg(t, 4.6, 5.8)), label: 'SSM ✔', tone: TONE.green }); banner = { text: 'TC confirms via SSM · green held for the bus', tone: 'ok' }; }
+      else banner = { text: 'Bus clears on an extended green — schedule kept', tone: 'ok' };
+      return { layout: 'cross', infra: 'signals', ew: 'green', ns: 'red', cars, packets, banner, waves: t >= 2 && t < 5.8 };
+    },
+  },
+
+  /* ---------------- more V2V ---------------- */
+  {
+    id: 'platoon', category: 'V2V', icon: '🚚', title: 'Truck Platooning (CACC)', tagline: 'Tight gaps held by V2V',
+    duration: 9,
+    why: 'Cooperative Adaptive Cruise Control links vehicles into a platoon. Each shares its BSM so followers react to the leader’s braking in milliseconds — far faster than a human — enabling safe, fuel-saving close following.',
+    messages: ['BSM', 'CACC'],
+    frame(t) {
+      const base = t < 3 ? lerp(80, 320, seg(t, 0, 3)) : (t < 4.5 ? lerp(320, 390, easeOut(seg(t, 3, 4.5))) : (t < 6 ? 390 : lerp(390, 860, seg(t, 6, 9))));
+      const gap = 150;
+      const slowing = t >= 3 && t < 4.6;
+      const cars = [
+        { id: 'l', x: base + gap * 2, y: G.ewLaneY, or: 'h', kind: 'truck', label: '1', broadcasting: true },
+        { id: 'm', x: base + gap, y: G.ewLaneY, or: 'h', kind: 'truck', label: '2', broadcasting: true },
+        { id: 'f', x: base, y: G.ewLaneY, or: 'h', kind: 'truck', label: '3', broadcasting: true },
+      ];
+      const packets = []; let banner;
+      if (t < 3) banner = { text: 'Three trucks travel as a single V2V platoon', tone: 'info' };
+      else if (slowing) {
+        packets.push({ ...lerpPt({ x: base + gap * 2, y: G.ewLaneY - 30 }, { x: base + gap, y: G.ewLaneY - 30 }, (t % 1)), label: 'BSM', tone: TONE.green });
+        packets.push({ ...lerpPt({ x: base + gap, y: G.ewLaneY - 30 }, { x: base, y: G.ewLaneY - 30 }, (t % 1)), label: 'BSM', tone: TONE.green });
+        banner = { text: 'Leader eases off → followers brake in sync via BSM', tone: 'info' };
+      }
+      else if (t < 6) banner = { text: 'Constant tight gap held — beyond human reaction time', tone: 'ok' };
+      else banner = { text: 'Platoon accelerates together, saving fuel & road space', tone: 'ok' };
+      return { layout: 'straightH', infra: 'none', cars, packets, banner, waves: t >= 3 };
+    },
+  },
+  {
+    id: 'merge', category: 'V2V', icon: '🔀', title: 'Cooperative Lane Merge', tagline: 'V2V negotiates the gap',
+    duration: 9,
+    why: 'A merging vehicle broadcasts its intent; a mainline vehicle receives it and cooperatively opens a gap by easing off. The two coordinate the merge over V2V instead of the usual last-second guesswork.',
+    messages: ['BSM', 'Maneuver'],
+    frame(t) {
+      const ax = t < 2 ? lerp(120, 300, seg(t, 0, 2)) : (t < 5 ? lerp(300, 430, seg(t, 2, 5)) : lerp(430, 780, seg(t, 5, 9)));
+      const mx = t < 5 ? lerp(40, 360, seg(t, 0, 5)) : lerp(360, 720, seg(t, 5, 9));
+      const my = t < 3.5 ? 292 : (t < 5 ? lerp(292, 250, seg(t, 3.5, 5)) : 250);
+      const cars = [
+        { id: 'a', x: ax, y: 250, or: 'h', kind: 'car', label: 'A', broadcasting: true },
+        { id: 'm', x: mx, y: my, or: 'h', kind: 'car', label: 'MERGE', broadcasting: true },
+      ];
+      const packets = []; let banner;
+      if (t < 2) banner = { text: 'A vehicle needs to merge from the ramp lane', tone: 'info' };
+      else if (t < 3.5) { packets.push({ ...lerpPt({ x: mx, y: 292 }, { x: ax, y: 250 }, (t % 1)), label: 'BSM', tone: TONE.green }); banner = { text: 'Merger broadcasts intent → mainline car opens a gap', tone: 'info' }; }
+      else if (t < 5) banner = { text: 'Gap opened — merger slots in cooperatively', tone: 'info' };
+      else banner = { text: 'Merged safely with no abrupt braking', tone: 'ok' };
+      return { layout: 'straightH', infra: 'none', cars, packets, banner, waves: t >= 2 && t < 5 };
+    },
+  },
+  {
+    id: 'dnpw', category: 'V2V', icon: '⛔', title: 'Do Not Pass Warning', tagline: 'Hidden oncoming traffic',
+    duration: 9,
+    why: 'On a two-lane road the ego considers passing a slow truck, but an oncoming vehicle is hidden beyond it. Their BSMs reveal the closing conflict and warn the driver not to pull out.',
+    messages: ['BSM', 'DNPW'],
+    frame(t) {
+      const ex = t < 4 ? lerp(20, 300, seg(t, 0, 4)) : (t < 5.5 ? lerp(300, 360, easeOut(seg(t, 4, 5.5))) : 360);
+      const tx = lerp(200, 520, seg(t, 0, 9));
+      const ox = lerp(940, 300, seg(t, 0, 9));
+      const warn = t >= 3 && t < 6;
+      const cars = [
+        { id: 'truck', x: tx, y: 292, or: 'h', kind: 'truck' },
+        { id: 'onc', x: ox, y: 250, or: 'h', kind: 'car', broadcasting: true },
+        { id: 'ego', x: ex, y: 292, or: 'h', kind: 'car', label: 'EGO', alert: warn, broadcasting: true },
+      ];
+      const packets = []; let banner;
+      if (t < 3) banner = { text: 'Stuck behind a slow truck — the driver wants to pass', tone: 'info' };
+      else if (t < 4.2) { packets.push({ ...lerpPt({ x: ox, y: 250 }, { x: ex, y: 292 }, seg(t, 3, 4.2)), label: 'BSM', tone: TONE.green }); banner = { text: 'BSMs reveal an oncoming vehicle you cannot see', tone: 'warn' }; }
+      else if (t < 6) banner = { text: '⛔ DO NOT PASS — oncoming traffic in the passing lane', tone: 'warn' };
+      else banner = { text: 'Passing withheld — head-on collision avoided', tone: 'ok' };
+      return { layout: 'straightH', infra: 'none', cars, packets, banner, waves: t >= 3 && t < 6 };
+    },
+  },
+
+  /* ---------------- more V2N ---------------- */
+  {
+    id: 'wrongway', category: 'V2N', icon: '🚫', title: 'Wrong-Way Driver Alert', tagline: 'Network flags a wrong-way vehicle',
+    duration: 9,
+    why: 'A vehicle travelling against traffic is detected from its BSM heading. The network broadcasts a wrong-way alert to vehicles in the area so they can slow and move over before a head-on.',
+    messages: ['BSM', 'TIM'],
+    frame(t) {
+      const ex = t < 3.5 ? lerp(-40, 300, seg(t, 0, 3.5)) : (t < 5.5 ? lerp(300, 380, easeOut(seg(t, 3.5, 5.5))) : 380);
+      const ey = t < 4 ? 292 : (t < 5.5 ? lerp(292, 250, seg(t, 4, 5.5)) : 250);
+      const wx = lerp(940, 260, seg(t, 0, 9));
+      const warn = t >= 3 && t < 6;
+      const cars = [
+        { id: 'ww', x: wx, y: 292, or: 'h', kind: 'car', label: 'WRONG-WAY', alert: true },
+        { id: 'ego', x: ex, y: ey, or: 'h', kind: 'car', label: 'EGO', alert: warn },
+      ];
+      const packets = []; let banner;
+      if (t < 1.5) banner = { text: 'Normal driving on a divided highway', tone: 'info' };
+      else if (t < 3.2) { packets.push({ ...lerpPt({ x: G.tower.x, y: G.tower.y }, { x: ex, y: 292 }, seg(t, 1.5, 3.2)), label: 'TIM', tone: TONE.violet }); banner = { text: 'Network detects a wrong-way vehicle from its BSM heading', tone: 'warn' }; }
+      else if (t < 6) banner = { text: '🚫 WRONG-WAY DRIVER AHEAD — slow down & move over', tone: 'warn' };
+      else banner = { text: 'Ego moved over early — head-on avoided', tone: 'ok' };
+      return { layout: 'straightH', infra: 'tower', cars, packets, banner, waves: t >= 1.5 && t < 3.2 };
+    },
+  },
+  {
+    id: 'incident', category: 'V2N', icon: '🆘', title: 'Stalled-Vehicle / Incident Ahead', tagline: 'Network relays a downstream hazard',
+    duration: 9,
+    why: 'A stalled vehicle or crash downstream is reported by connected cars and cameras. The network pushes an incident TIM upstream so drivers slow and change lanes early — smoothing traffic and preventing secondary crashes.',
+    messages: ['TIM'],
+    frame(t) {
+      const ex = t < 3.5 ? lerp(-40, 300, seg(t, 0, 3.5)) : lerp(300, 900, seg(t, 3.5, 9));
+      const ey = t < 4 ? 292 : (t < 5.5 ? lerp(292, 250, seg(t, 4, 5.5)) : 250);
+      const cars = [
+        { id: 'stall', x: 672, y: 292, or: 'h', kind: 'car', alert: true },
+        { id: 'ego', x: ex, y: ey, or: 'h', kind: 'car', label: 'EGO' },
+      ];
+      const packets = []; let banner;
+      if (t < 1.5) banner = { text: 'A vehicle is stalled downstream, out of sight', tone: 'info' };
+      else if (t < 3.2) { packets.push({ ...lerpPt({ x: G.tower.x, y: G.tower.y }, { x: ex, y: 292 }, seg(t, 1.5, 3.2)), label: 'TIM', tone: TONE.violet }); banner = { text: 'Network pushes an incident TIM upstream', tone: 'info' }; }
+      else if (t < 5.5) banner = { text: 'Advisory: lane blocked ahead — move over now', tone: 'warn' };
+      else banner = { text: 'Passed the incident safely in the open lane', tone: 'ok' };
+      return { layout: 'straightH', infra: 'tower', cars, packets, banner, waves: t >= 1.5 && t < 3.2 };
+    },
+  },
+
+  /* ---------------- more V2P ---------------- */
+  {
+    id: 'dartout', category: 'V2P', icon: '🧒', title: 'School-Zone Dart-Out', tagline: 'Child emerges between parked cars',
+    duration: 8,
+    why: 'In a school zone a child darts into the street from between parked cars — invisible to the driver. A wearable / phone PSM (or school-zone beacon) announces the child, giving the ADAS time to emergency-brake.',
+    messages: ['PSM'],
+    frame(t) {
+      const cx = 470;
+      const ex = t < 3 ? lerp(-40, 300, seg(t, 0, 3)) : (t < 4.8 ? lerp(300, 395, easeOut(seg(t, 3, 4.8))) : 395);
+      const py = t < 1.8 ? 226 : lerp(226, 292, seg(t, 1.8, 4));
+      const warn = t >= 2.4 && t < 5;
+      const cars = [
+        { id: 'p1', x: 418, y: 246, or: 'h', kind: 'car' },
+        { id: 'p2', x: 522, y: 246, or: 'h', kind: 'car' },
+        { id: 'ego', x: ex, y: 292, or: 'h', kind: 'car', label: 'EGO', alert: warn },
+      ];
+      const ped = { x: cx, y: py, broadcasting: true };
+      const packets = []; let banner;
+      if (t < 1.8) banner = { text: 'School zone — parked cars block the driver’s view', tone: 'info' };
+      else if (t < 2.4) { packets.push({ ...lerpPt({ x: cx, y: py }, { x: ex, y: 292 }, seg(t, 1.8, 2.4)), label: 'PSM', tone: TONE.amber }); banner = { text: 'A child darts out → wearable / phone broadcasts a PSM', tone: 'warn' }; }
+      else if (t < 5) banner = { text: '⚠ CHILD IN ROADWAY — emergency braking', tone: 'warn' };
+      else banner = { text: 'Stopped in time — child unharmed', tone: 'ok' };
+      return { layout: 'straightH', infra: 'none', cars, packets, ped, banner, waves: t >= 1.8 && t < 5 };
+    },
+  },
+  {
+    id: 'aps', category: 'V2P', icon: '🦽', title: 'Accessible Ped Signal · Extended Crossing', tagline: 'Slow pedestrian requests more time',
+    duration: 11,
+    why: 'A pedestrian using a mobility device sends a crossing request; the controller grants a longer walk phase so they can finish safely. Vehicles hold on red until the extended pedestrian phase completes.',
+    messages: ['PSM', 'SRM', 'SPaT'],
+    frame(t) {
+      const py = t < 2 ? 330 : lerp(330, 150, seg(t, 2, 10));
+      const cars = [{ id: 'wait', x: G.ewStop, y: G.ewLaneY, or: 'h', kind: 'car' }];
+      const ped = { x: 450, y: py, broadcasting: true };
+      const packets = []; let banner;
+      if (t < 1.5) banner = { text: 'A pedestrian with a mobility device waits to cross', tone: 'info' };
+      else if (t < 3) { packets.push({ ...lerpPt({ x: 450, y: py }, G.rsu, seg(t, 1.5, 3)), label: 'request', tone: TONE.amber }); banner = { text: 'Their device sends a crossing request', tone: 'info' }; }
+      else if (t < 4.2) { packets.push({ ...lerpPt(G.rsu, G.tc, seg(t, 3, 4.2)), label: 'request', tone: TONE.amber }); banner = { text: 'RSU → TC: extend the pedestrian WALK phase', tone: 'info' }; }
+      else if (t < 9.5) banner = { text: 'Extended WALK granted — vehicles hold', tone: 'ok', sub: 'more crossing time for the vulnerable road user' };
+      else banner = { text: 'Pedestrian finished crossing safely', tone: 'ok' };
+      return { layout: 'cross', infra: 'signals', ew: 'red', ns: 'green', cars, packets, ped, banner, waves: t >= 1.5 && t < 4.2 };
+    },
+  },
+
+  /* ---------------- more V2I ---------------- */
+  {
+    id: 'rail', category: 'V2I', icon: '🚂', title: 'Rail Crossing Warning', tagline: 'Train approaching the level crossing',
+    duration: 10,
+    why: 'An RSU at a highway–rail grade crossing detects an approaching train and broadcasts a warning. Connected vehicles receive it and stop before the tracks — even if the driver is distracted or the gates fail.',
+    messages: ['TIM', 'SPaT'],
+    frame(t) {
+      const ex = t < 3 ? lerp(-40, 300, seg(t, 0, 3)) : (t < 4.6 ? lerp(300, G.ewStop, easeOut(seg(t, 3, 4.6))) : G.ewStop);
+      const trainY = lerp(-170, 660, seg(t, 3, 10));
+      const warn = t >= 2.6 && t < 9;
+      const cars = [
+        { id: 'train', x: 450, y: trainY, or: 'v', kind: 'train' },
+        { id: 'ego', x: ex, y: G.ewLaneY, or: 'h', kind: 'car', label: 'EGO', alert: warn },
+      ];
+      const packets = []; let banner;
+      if (t < 1.5) banner = { text: 'Vehicle approaches a highway–rail grade crossing', tone: 'info' };
+      else if (t < 2.6) { packets.push({ ...lerpPt(G.rsu, { x: ex, y: G.ewLaneY }, seg(t, 1.5, 2.6)), label: 'TIM', tone: TONE.violet }); banner = { text: 'RSU broadcasts a train-approaching warning', tone: 'warn' }; }
+      else if (t < 9) banner = { text: '⚠ TRAIN APPROACHING — stop before the tracks', tone: 'warn' };
+      else banner = { text: 'Vehicle held safely as the train passes', tone: 'ok' };
+      return { layout: 'cross', infra: 'signals', rail: true, ew: 'red', ns: 'green', cars, packets, banner, waves: t >= 1.5 && t < 2.6 };
     },
   },
 ];
@@ -767,21 +1221,42 @@ function ScenarioPlayer({ scn }) {
 
 function UseCasesTab() {
   const [id, setId] = useState(SCENARIOS[0].id);
+  const [open, setOpen] = useState({});   // all categories collapsed by default
   const scn = SCENARIOS.find((s) => s.id === id);
+  const cat = CATEGORIES.find((c) => c.id === scn.category);
   return (
     <div className="flex h-full min-h-0">
-      {/* scenario list */}
+      {/* scenario list, grouped by communication category */}
       <div className="w-72 shrink-0 border-r border-zinc-800 bg-zinc-950/60 p-3 overflow-auto">
         <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-400 mb-1 px-1">V2X Use Cases</h2>
-        <p className="text-[11px] text-slate-500 mb-3 px-1">Real problems this technology solves. Pick one to watch it play out.</p>
-        {SCENARIOS.map((s) => (
-          <button key={s.id} onClick={() => setId(s.id)}
-            className={'w-full mb-2 rounded-xl border p-3 text-left transition ' +
-              (id === s.id ? 'border-neon-cyan bg-neon-cyan/10' : 'border-zinc-800 bg-zinc-900/50 hover:border-zinc-600')}>
-            <div className="flex items-center gap-2"><span className="text-lg">{s.icon}</span><span className="text-[13px] font-semibold text-slate-100">{s.title}</span></div>
-            <div className="mt-1 text-[11px] text-slate-400">{s.tagline}</div>
-          </button>
-        ))}
+        <p className="text-[11px] text-slate-500 mb-3 px-1">Grouped by who is communicating with whom.</p>
+        {CATEGORIES.map((c) => {
+          const items = SCENARIOS.filter((s) => s.category === c.id);
+          const isOpen = open[c.id];
+          return (
+            <div key={c.id} className="mb-2">
+              <button onClick={() => setOpen((o) => ({ ...o, [c.id]: !o[c.id] }))}
+                className="w-full flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/70 px-2.5 py-2 hover:border-zinc-600">
+                <span className="text-slate-500 w-3">{isOpen ? '▾' : '▸'}</span>
+                <span className="rounded bg-neon-cyan/15 text-neon-cyan text-[10px] font-bold px-1.5 py-0.5">{c.label}</span>
+                <span className="text-[12px] text-slate-200">{c.name}</span>
+                <span className="ml-auto text-[10px] text-slate-500">{items.length}</span>
+              </button>
+              {isOpen && (
+                <div className="mt-1.5 space-y-1.5 pl-1">
+                  {items.map((s) => (
+                    <button key={s.id} onClick={() => setId(s.id)}
+                      className={'w-full rounded-lg border p-2.5 text-left transition ' +
+                        (id === s.id ? 'border-neon-cyan bg-neon-cyan/10' : 'border-zinc-800 bg-zinc-900/40 hover:border-zinc-600')}>
+                      <div className="flex items-center gap-2"><span className="text-base">{s.icon}</span><span className="text-[12px] font-semibold text-slate-100">{s.title}</span></div>
+                      <div className="mt-0.5 text-[11px] text-slate-400">{s.tagline}</div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       {/* player */}
@@ -790,7 +1265,10 @@ function UseCasesTab() {
       {/* explainer */}
       <div className="w-80 shrink-0 border-l border-zinc-800 bg-zinc-950/60 p-4 overflow-auto">
         <div className="flex items-center gap-2 mb-1"><span className="text-2xl">{scn.icon}</span><h3 className="text-base font-bold text-slate-100">{scn.title}</h3></div>
-        <div className="text-[12px] text-neon-cyan mb-3">{scn.tagline}</div>
+        <div className="flex items-center gap-2 mb-3">
+          <span className="rounded bg-neon-cyan/15 text-neon-cyan text-[10px] font-bold px-1.5 py-0.5">{cat.label}</span>
+          <span className="text-[12px] text-neon-cyan">{scn.tagline}</span>
+        </div>
         <p className="text-[13px] leading-relaxed text-slate-300">{scn.why}</p>
         <div className="mt-4">
           <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-1.5">Messages involved</div>
@@ -799,7 +1277,7 @@ function UseCasesTab() {
           </div>
         </div>
         <div className="mt-6 rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-[11px] text-slate-400 leading-relaxed">
-          These are a few high-value examples — V2X also enables curve-speed warnings, work-zone alerts, transit signal priority, wrong-way detection, and cooperative merging.
+          <span className="text-slate-300 font-semibold">{cat.label}</span> — {cat.desc}. More could be added per category (transit signal priority, curve-speed & wrong-way warnings, cooperative merge, platooning…).
         </div>
       </div>
     </div>
@@ -831,6 +1309,7 @@ const GLOSSARY = [
     { term: 'MAP (Intersection Geometry)', def: 'Broadcasted by RSUs to provide a centimeter-accurate digital layout of lane centerlines, lane attributes, allowed maneuvers, and stop bar boundaries.', child: 'SAE J2735' },
     { term: 'PSM (Personal Safety Message)', def: 'Broadcasted by or for Vulnerable Road Users (VRUs) like pedestrians, cyclists, or road workers to declare their position and presence to passing vehicles.', child: 'SAE J2735' },
     { term: 'SRM / SSM', def: 'Signal Request Message (a vehicle asking for priority/preemption) and Signal Status Message (the controller’s response confirming the request state).', child: 'SAE J2735' },
+    { term: 'TIM (Traveler Information Message)', def: 'Advisory content — work zones, reduced-speed zones, road-weather, and incident/hazard alerts — delivered to vehicles by roadside units or over the cellular network from a Traffic Management Center.', child: 'SAE J2735' },
   ]},
   { group: 'Architecture', icon: '🧭', items: [
     { term: 'TC → RSU', def: 'The local, wired data pipeline where signal controller telemetry is fed to the roadside radio, often requiring a conversion layer to shift from NTCIP 1202 streams to standardized J2735 messages.' },
