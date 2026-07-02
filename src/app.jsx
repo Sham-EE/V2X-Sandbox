@@ -129,6 +129,7 @@ const MODELS = {
 
 // Vehicle-type roles: car (obu), emergency (ev), transit bus (bus).
 const isVehicle = (t) => t === 'obu' || t === 'ev' || t === 'bus';
+const isMobile = (t) => isVehicle(t) || t === 'ped';           // can be given a travel direction
 const canRequestPriority = (t) => t === 'ev' || t === 'bus';   // authorized to send a granted SRM
 
 // Which two device types form which link when wired together.
@@ -254,7 +255,7 @@ const CONN_DESC = {
   wireless: 'The over-the-air C-V2X / DSRC link. SPaT / MAP / TIM are broadcast to vehicles; BSM / SRM come back from them.',
   v2v: 'Direct vehicle-to-vehicle exchange of BSMs (position, speed, heading, braking) — works with no infrastructure at all.',
   v2p: 'Vehicle-to-pedestrian. The VRU device broadcasts a PSM; in return an RSU can send pedestrian crossing timing (SPaT) and vehicles their BSM, so the phone can warn the pedestrian.',
-  signal: 'The controller’s physical phase & timing control that energizes the signal head (red / yellow / green). It is NOT a radio link — but its live state is exactly what the SPaT message reports over the air.',
+  signal: 'Not a direct wire. The controller sends low-voltage logic to a LOAD SWITCH (a solid-state relay) in the cabinet — watched by the conflict monitor (MMU) — which switches field power out through the cabinet terminals, into underground conduit, up the pole/mast arm, to the signal head’s LED modules. It is NOT a radio link, but this indicated state is exactly what the SPaT message reports over the air.',
   generic: 'A generic link between two devices.',
 };
 
@@ -306,14 +307,15 @@ const SIM_LOOP = 20;        // seconds — the scrub timeline spans one loop
 const DRIVE_V = 95;         // px/sec base vehicle speed
 const DRIVE_DIR = { e: { dx: 1, dy: 0 }, w: { dx: -1, dy: 0 }, n: { dx: 0, dy: -1 }, s: { dx: 0, dy: 1 } };
 const DRIVE_ARROW = { e: '→', w: '←', n: '↑', s: '↓' };
-// Deterministic live position of an object at sim-time t (seconds). Driving OBUs
-// advance along their direction and wrap around the canvas; everything else is static.
-// Being a pure function of t makes the scrub timeline trivially consistent.
+const DRIVE_ROT = { n: 0, e: 90, s: 180, w: 270 };   // vehicle art points north by default
+// Deterministic live position of an object at sim-time t (seconds). Mobile objects
+// (vehicles / pedestrians) advance along their direction and wrap around the canvas;
+// everything else is static. Being a pure function of t makes scrubbing consistent.
 function liveXY(o, t) {
   if (!o.drive || !DRIVE_DIR[o.drive]) return { x: o.x, y: o.y };
-  const d = DRIVE_DIR[o.drive], W = WB.w - 40, H = WB.h - 40;
+  const d = DRIVE_DIR[o.drive], V = o.type === 'ped' ? 38 : DRIVE_V, W = WB.w - 40, H = WB.h - 40;
   const wrap = (v, lo, span) => ((v - lo) % span + span) % span + lo;
-  return { x: wrap(o.x + d.dx * DRIVE_V * t, 20, W), y: wrap(o.y + d.dy * DRIVE_V * t, 20, H) };
+  return { x: wrap(o.x + d.dx * V * t, 20, W), y: wrap(o.y + d.dy * V * t, 20, H) };
 }
 let _uid = 0;
 // random suffix so ids never collide with those in a loaded saved world
@@ -386,8 +388,9 @@ function svgPoint(svg, cx, cy) {
 }
 
 // --- centered SVG artwork for each device/road type ---
-function DeviceArt({ type, model, sig }) {
+function DeviceArt({ type, model, sig, rot }) {
   const label = model ? `${model.vendor} ${model.name}` : TYPES[type].label;
+  const spin = (body) => <g transform={`rotate(${rot || 0})`}>{body}</g>;   // rotate the body, keep the label upright
   const tag = (t) => <text y={TYPES[type].size.h / 2 + 16} textAnchor="middle" className="fill-slate-400 text-[10px]">{t}</text>;
   switch (type) {
     case 'tc':
@@ -414,9 +417,12 @@ function DeviceArt({ type, model, sig }) {
     case 'obu':
       return (
         <g>
-          <rect x="-26" y="-44" width="52" height="88" rx="15" className="fill-blue-700 stroke-blue-300" strokeWidth="2" />
-          <rect x="-19" y="-32" width="38" height="22" rx="6" className="fill-blue-200/80" />
-          <rect x="-19" y="12" width="38" height="16" rx="5" className="fill-blue-400/70" />
+          {spin(<g>
+            <rect x="-26" y="-44" width="52" height="88" rx="15" className="fill-blue-700 stroke-blue-300" strokeWidth="2" />
+            <rect x="-19" y="-32" width="38" height="22" rx="6" className="fill-blue-200/80" />
+            <rect x="-19" y="12" width="38" height="16" rx="5" className="fill-blue-400/70" />
+            <rect x="-2" y="-42" width="4" height="8" rx="2" className="fill-neon-cyan" />{/* nose marker */}
+          </g>)}
           <rect x="-21" y="-6" width="19" height="12" rx="3" className="fill-emerald-500/25 stroke-neon-green" />
           <text x="-11" y="3" textAnchor="middle" className="fill-neon-green text-[8px] font-bold">OBU</text>
           <rect x="2" y="-6" width="19" height="12" rx="3" className="fill-cyan-500/20 stroke-neon-cyan" />
@@ -427,22 +433,26 @@ function DeviceArt({ type, model, sig }) {
     case 'ev':
       return (
         <g>
-          <rect x="-26" y="-46" width="52" height="92" rx="14" className="fill-slate-100 stroke-red-500" strokeWidth="2.5" />
-          <rect x="-26" y="-4" width="52" height="9" fill="#ef4444" />
-          <rect x="-9" y="-52" width="7" height="7" fill="#ef4444" /><rect x="2" y="-52" width="7" height="7" fill="#3b82f6" />
-          <rect x="-19" y="-34" width="38" height="20" rx="6" className="fill-sky-200/80" />
-          <text x="0" y="30" textAnchor="middle" className="fill-red-600 text-[10px] font-black">EMS</text>
+          {spin(<g>
+            <rect x="-26" y="-46" width="52" height="92" rx="14" className="fill-slate-100 stroke-red-500" strokeWidth="2.5" />
+            <rect x="-26" y="-4" width="52" height="9" fill="#ef4444" />
+            <rect x="-9" y="-52" width="7" height="7" fill="#ef4444" /><rect x="2" y="-52" width="7" height="7" fill="#3b82f6" />
+            <rect x="-19" y="-34" width="38" height="20" rx="6" className="fill-sky-200/80" />
+            <text x="0" y="26" textAnchor="middle" className="fill-red-600 text-[10px] font-black">EMS</text>
+          </g>)}
           {tag(label)}
         </g>
       );
     case 'bus':
       return (
         <g>
-          <rect x="-27" y="-50" width="54" height="100" rx="10" className="fill-teal-600 stroke-teal-300" strokeWidth="2.5" />
-          <rect x="-20" y="-40" width="40" height="16" rx="4" className="fill-cyan-100/80" />
-          <rect x="-20" y="-18" width="40" height="12" rx="3" className="fill-cyan-100/50" />
-          <rect x="-20" y="0" width="40" height="12" rx="3" className="fill-cyan-100/50" />
-          <text x="0" y="34" textAnchor="middle" className="fill-white text-[10px] font-black">BUS</text>
+          {spin(<g>
+            <rect x="-27" y="-50" width="54" height="100" rx="10" className="fill-teal-600 stroke-teal-300" strokeWidth="2.5" />
+            <rect x="-20" y="-40" width="40" height="16" rx="4" className="fill-cyan-100/80" />
+            <rect x="-20" y="-18" width="40" height="12" rx="3" className="fill-cyan-100/50" />
+            <rect x="-20" y="0" width="40" height="12" rx="3" className="fill-cyan-100/50" />
+            <text x="0" y="34" textAnchor="middle" className="fill-white text-[10px] font-black">BUS</text>
+          </g>)}
           {tag(label)}
         </g>
       );
@@ -669,7 +679,7 @@ function WorldBuilderTab({ openGlossary }) {
     return () => cancelAnimationFrame(simRaf.current);
   }, [sim, paused, speed]);
   // stop simulating if there is nothing left to animate
-  useEffect(() => { if (sim && conns.length === 0 && !devices.some((o) => isVehicle(o.type) && o.drive)) { setSim(false); setPaused(false); } }, [sim, conns.length]);
+  useEffect(() => { if (sim && conns.length === 0 && !devices.some((o) => isMobile(o.type) && o.drive)) { setSim(false); setPaused(false); } }, [sim, conns.length]);
 
   // palette drop
   const placeAt = (type, pos) => (type === 'intersection' ? addIntersection(pos) : addObject(type, pos));
@@ -752,14 +762,14 @@ function WorldBuilderTab({ openGlossary }) {
   // ----- live sim state derived from simT -----
   const phase = (simT / 2.2) % 1;                       // 0..1 packet-flow clock
   const lp = (o) => (o && sim ? liveXY(o, simT) : o ? { x: o.x, y: o.y } : { x: 0, y: 0 });
-  const anyDriving = devices.some((o) => isVehicle(o.type) && o.drive);
+  const anyDriving = devices.some((o) => isMobile(o.type) && o.drive);
   // Range-based connectivity: ephemeral wireless links to every OBU inside an RSU's
   // range circle (unless already manually wired). They form/break as vehicles drive.
   const autoLinks = useMemo(() => {
     if (!sim) return [];
     const out = [];
     const rsus = devices.filter((o) => o.type === 'rsu');
-    const obus = devices.filter((o) => isVehicle(o.type));
+    const obus = devices.filter((o) => isMobile(o.type));   // vehicles + pedestrians
     obus.forEach((ob) => { const op = lp(ob); rsus.forEach((r) => {
       if ((r.x - op.x) ** 2 + (r.y - op.y) ** 2 > RANGE * RANGE) return;
       if (conns.some((c) => (c.from === r.id && c.to === ob.id) || (c.from === ob.id && c.to === r.id))) return;
@@ -901,11 +911,20 @@ function WorldBuilderTab({ openGlossary }) {
               const la = lp(a), lb = lp(b);
               const st = CONN_STYLE[connKind(a.type, b.type)];
               const isSel = sel?.kind === 'conn' && sel.id === c.id;
+              const isSignal = connKind(a.type, b.type) === 'signal';
+              const mid = { x: (la.x + lb.x) / 2, y: (la.y + lb.y) / 2 };
               return (
                 <g key={c.id} style={{ cursor: 'pointer' }} onPointerDown={(e) => { e.stopPropagation(); setSel({ kind: 'conn', id: c.id }); }}>
                   <line x1={la.x} y1={la.y} x2={lb.x} y2={lb.y} stroke="transparent" strokeWidth="14" />
                   <line x1={la.x} y1={la.y} x2={lb.x} y2={lb.y} stroke={st.color} strokeWidth={isSel ? 4 : 2.5}
                     strokeDasharray={st.dash} className={isSel ? 'glow-cyan' : ''} />
+                  {/* load switch: the TC drives the head THROUGH a cabinet relay, not directly */}
+                  {isSignal && (
+                    <g transform={`translate(${mid.x},${mid.y})`}>
+                      <rect x="-13" y="-9" width="26" height="18" rx="3" className="fill-zinc-800 stroke-amber-400" strokeWidth="1.5" />
+                      <text x="0" y="4" textAnchor="middle" className="fill-amber-300 text-[9px] font-bold">LS</text>
+                    </g>
+                  )}
                 </g>
               );
             })}
@@ -927,9 +946,10 @@ function WorldBuilderTab({ openGlossary }) {
                 const wiredToTC = conns.some((c) => { const oth = c.from === o.id ? byId[c.to] : c.to === o.id ? byId[c.from] : null; return oth && oth.type === 'tc'; });
                 if (wiredToTC) sig = phase < 0.5 ? 'green' : phase < 0.62 ? 'yellow' : 'red';
               }
-              const moving = isVehicle(o.type) && o.drive;
+              const moving = isMobile(o.type) && o.drive;
+              const rot = isVehicle(o.type) && o.drive ? DRIVE_ROT[o.drive] : 0;
               const pos = lp(o);                       // live position while simulating
-              const lockDrag = sim && moving;          // a driving vehicle can't be dragged mid-sim
+              const lockDrag = sim && moving;          // a moving object can't be dragged mid-sim
               return (
                 <g key={o.id} transform={`translate(${pos.x},${pos.y})`} className={'spart ' + (isSel ? 'part-hi' : '')}
                    style={{ cursor: lockDrag ? 'pointer' : 'move' }}
@@ -937,8 +957,8 @@ function WorldBuilderTab({ openGlossary }) {
                   {/* selection outline + hit padding */}
                   <rect x={-sz.w / 2 - 4} y={-sz.h / 2 - 4} width={sz.w + 8} height={sz.h + 8} rx="8"
                     fill="transparent" stroke={isSel ? '#22d3ee' : 'transparent'} strokeDasharray="6 5" />
-                  <DeviceArt type={o.type} model={model} sig={sig} />
-                  {/* drive-direction badge on moving vehicles */}
+                  <DeviceArt type={o.type} model={model} sig={sig} rot={rot} />
+                  {/* travel-direction badge on moving vehicles / pedestrians */}
                   {moving && <text x={sz.w / 2 + 6} y={-sz.h / 2 + 2} className="fill-neon-cyan text-[14px] font-bold">{DRIVE_ARROW[o.drive]}</text>}
                   {/* wiring port (its own handler pre-empts the group drag) */}
                   {!lockDrag && <circle cx="0" cy={-sz.h / 2 - 14} r="6" className="fill-zinc-950 stroke-neon-cyan" strokeWidth="2"
@@ -1148,10 +1168,10 @@ function WorldBuilderTab({ openGlossary }) {
 
             <SpecSheet type={selObj.type} model={MODELS[selObj.type]?.find((m) => m.id === selObj.modelId)} />
 
-            {/* Drive control — turns a static OBU into a moving vehicle */}
-            {isVehicle(selObj.type) && (
+            {/* Drive / Walk control — turns a static vehicle or pedestrian into a moving one */}
+            {isMobile(selObj.type) && (
               <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
-                <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-1.5">Drive</div>
+                <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-1.5">{selObj.type === 'ped' ? 'Walk' : 'Drive'}</div>
                 <div className="flex gap-1">
                   {[{ v: null, l: 'Off' }, { v: 'e', l: '→' }, { v: 'w', l: '←' }, { v: 'n', l: '↑' }, { v: 's', l: '↓' }].map((d) => {
                     const on = (selObj.drive || null) === d.v;
@@ -1159,7 +1179,7 @@ function WorldBuilderTab({ openGlossary }) {
                       className={'flex-1 rounded-md border px-2 py-1.5 text-sm font-medium transition ' + (on ? 'border-neon-cyan bg-neon-cyan/15 text-neon-cyan' : 'border-zinc-700 text-slate-300 hover:border-zinc-500')}>{d.l}</button>;
                   })}
                 </div>
-                <p className="mt-1.5 text-[11px] text-slate-500">A driving vehicle loops across the canvas during simulation — links to any RSU form/break as it passes through range.</p>
+                <p className="mt-1.5 text-[11px] text-slate-500">{selObj.type === 'ped' ? 'A walking pedestrian broadcasts a PSM; links to any RSU form/break as they pass through range.' : 'A driving vehicle loops across the canvas during simulation — links to any RSU form/break as it passes through range.'}</p>
               </div>
             )}
 
@@ -1994,6 +2014,8 @@ const GLOSSARY = [
   { group: 'Devices', icon: '🛰️', items: [
     { term: 'Traffic Controller (TC)', def: 'The roadside computer cabinet that physically controls the traffic signal lights and timing phases based on loops, cameras, or fixed pre-timed schedules.' },
     { term: 'Advanced Traffic Controller (ATC)', def: 'A modern Linux-based controller (per the ATC 5201 standard) that can natively generate and sign SAE J2735 SPaT/MAP, unlike legacy NEMA TS2 / Model 170 controllers that only speak NTCIP 1202 and need the RSU to convert.' },
+    { term: 'Load Switch', def: 'A solid-state relay in the signal cabinet. The controller only emits low-voltage logic; the load switch takes that command and switches the actual field power (LED driver / 120 VAC) out to one signal channel. Power then runs through the cabinet terminals, underground conduit, and up the pole to the signal head — the TC never drives the LEDs directly.' },
+    { term: 'Conflict Monitor (MMU)', def: 'The Malfunction Management Unit — an independent safety device in the cabinet that continuously watches the load-switch outputs. If it ever detects conflicting greens (or other faults), it overrides the controller and drops the intersection to flashing red.' },
     { term: 'Roadside Unit (RSU)', def: 'An ITS device mounted on roadside infrastructure (like a signal pole) that facilitates wireless communication between the traffic controller and nearby vehicles or pedestrians.' },
     { term: 'On-Board Unit (OBU)', def: "A hardware transceiver installed inside a vehicle that receives over-the-air messages from the RSU and broadcasts the vehicle's own real-time state." },
     { term: 'ADAS', def: 'Advanced Driver-Assistance System — the in-vehicle brain that fuses incoming V2X messages with onboard sensors (radar/camera/lidar) to warn the driver or actuate braking and steering.' },
