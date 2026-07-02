@@ -32,6 +32,8 @@ const TYPES = {
   tc:    { label: 'Traffic Controller', cat: 'device', size: { w: 66, h: 96 }, glyph: '🗄️' },
   rsu:   { label: 'Roadside Unit (RSU)', cat: 'device', size: { w: 60, h: 44 }, glyph: '📡' },
   obu:   { label: 'Vehicle (OBU)',       cat: 'device', size: { w: 52, h: 90 }, glyph: '🚗' },
+  ev:    { label: 'Emergency Vehicle',   cat: 'device', size: { w: 52, h: 92 }, glyph: '🚑' },
+  bus:   { label: 'Bus / Transit',       cat: 'device', size: { w: 54, h: 100 }, glyph: '🚌' },
   signal:{ label: 'Signal Head',         cat: 'device', size: { w: 30, h: 78 }, glyph: '🚦' },
   ped:   { label: 'Pedestrian (VRU)',    cat: 'device', size: { w: 40, h: 60 }, glyph: '🚶' },
   roadH: { label: 'Road — Horizontal',   cat: 'road',   size: { w: 340, h: 108 }, glyph: '↔' },
@@ -88,18 +90,32 @@ const MODELS = {
     { id: 'commsignia-ob4', vendor: 'Commsignia', name: 'ITS-OB4', gen: 'Modern',
       tagline: 'Aftermarket/embedded on-board unit for connected vehicles.',
       specs: { Radios: 'C-V2X PC5 + DSRC', Security: 'IEEE 1609.2', 'BSM rate': '10 Hz', Receives: 'SPaT, MAP, TIM, PSM', GNSS: 'Lane-level' },
-      can: ['Broadcast BSM (position/speed/heading/brake)', 'Receive & verify SPaT/MAP', 'Send SRM for priority (transit/EMS)'],
-      cannot: ['Control the vehicle — it feeds the ADAS, which decides'] },
+      can: ['Broadcast BSM (position/speed/heading/brake)', 'Receive & verify SPaT/MAP', 'Feed driver-warning apps (FCW, RLVW, EEBL)'],
+      cannot: ['Control the vehicle — it feeds the ADAS, which decides', 'Be granted signal priority — a passenger car is not an authorized SRM role'] },
     { id: 'autotalks-craton2', vendor: 'Autotalks', name: 'CRATON2', gen: 'Modern',
       tagline: 'Automotive-grade V2X chipset for OEM integration.',
       specs: { Radios: 'C-V2X + DSRC (dual)', Security: 'Hardware secure element', 'BSM rate': '10 Hz', Receives: 'SPaT, MAP, BSM, PSM', GNSS: 'High-precision' },
       can: ['Hardware-accelerated 1609.2 verification', 'Simultaneous DSRC + C-V2X', 'Feed ADAS safety apps (FCW, RLVW)'],
       cannot: ['See non-equipped road users without a sensor/PSM source'] },
     { id: 'generic-adas', vendor: 'Generic', name: 'ADAS Vehicle', gen: 'Modern',
-      tagline: 'A connected vehicle: OBU radio + ADAS decision brain.',
-      specs: { Radios: 'C-V2X', Security: 'IEEE 1609.2', 'BSM rate': '10 Hz', Receives: 'SPaT, MAP, TIM', GNSS: 'Standard' },
+      tagline: 'A connected passenger vehicle: OBU radio + ADAS decision brain.',
+      specs: { Radios: 'C-V2X', Security: 'IEEE 1609.2', Role: 'basicVehicle', 'BSM rate': '10 Hz', Receives: 'SPaT, MAP, TIM' },
       can: ['Compute time-to-stop-bar for RLVW', 'React to SPaT (GLOSA speed advisory)', 'Announce itself via BSM (acts as a detector)'],
-      cannot: ['Trust unsigned messages (dropped per 1609.2)'] },
+      cannot: ['Trust unsigned messages (dropped per 1609.2)', 'Get signal priority/preemption — no authorized SRM role'] },
+  ],
+  ev: [
+    { id: 'ev-generic', vendor: 'Generic', name: 'Emergency Vehicle', gen: 'Modern',
+      tagline: 'Fire / ambulance / police OBU authorized for signal PREEMPTION.',
+      specs: { Role: 'emergency (fire/EMS/police)', Priority: 'Preemption — interrupts the cycle', Radios: 'C-V2X', Security: 'SCMS role certificate', 'BSM rate': '10 Hz' },
+      can: ['Send an SRM the controller GRANTS as preemption', 'Get an immediate authorized green', 'Broadcast BSM like any vehicle'],
+      cannot: ['Be impersonated by ordinary cars — the role is in the signed 1609.2 certificate'] },
+  ],
+  bus: [
+    { id: 'bus-transit', vendor: 'Generic', name: 'Transit Bus', gen: 'Modern',
+      tagline: 'Transit OBU authorized for signal PRIORITY (softer than preemption).',
+      specs: { Role: 'publicTransport', Priority: 'Priority — extend green / trim red', Radios: 'C-V2X', Security: 'SCMS role certificate', 'BSM rate': '10 Hz' },
+      can: ['Send an SRM granted as priority when behind schedule (TSP)', 'Broadcast BSM like any vehicle'],
+      cannot: ['Preempt / interrupt the cycle the way an emergency vehicle can'] },
   ],
   signal: [
     { id: 'sig-3', vendor: 'Generic', name: '3-Section Head', gen: '—',
@@ -111,13 +127,17 @@ const MODELS = {
   ],
 };
 
+// Vehicle-type roles: car (obu), emergency (ev), transit bus (bus).
+const isVehicle = (t) => t === 'obu' || t === 'ev' || t === 'bus';
+const canRequestPriority = (t) => t === 'ev' || t === 'bus';   // authorized to send a granted SRM
+
 // Which two device types form which link when wired together.
 function connKind(a, b) {
   const s = new Set([a, b]);
   if (s.has('tc') && s.has('rsu')) return 'ethernet';
   if (s.has('ped')) return 'v2p';
-  if (a === 'obu' && b === 'obu') return 'v2v';
-  if (s.has('rsu') && s.has('obu')) return 'wireless';
+  if (isVehicle(a) && isVehicle(b)) return 'v2v';
+  if (s.has('rsu') && (isVehicle(a) || isVehicle(b))) return 'wireless';
   if (s.has('tc') && s.has('signal')) return 'signal';
   return 'generic';
 }
@@ -177,8 +197,12 @@ function linkStreams(a, b, dir, enabled, mapStore) {
   const down = kind === 'wireless'
     ? ['SPaT', 'MAP', 'TIM', 'SSM']
     : (mapStore === 'tc' ? ['SPaT', 'MAP', 'SSM'] : ['SPaT', 'SSM']);
+  // Upstream: every vehicle sends BSM, but only an authorized role (emergency /
+  // transit) sends an SRM the controller will grant. A passenger car sends BSM only.
+  const veh = d;   // downstream endpoint = the vehicle on a wireless link
+  const up = kind === 'wireless' && !canRequestPriority(veh.type) ? ['BSM'] : ['BSM', 'SRM'];
   if (showDown) down.forEach((m) => push(s, d, m, 'down'));
-  if (showUp) ['BSM', 'SRM'].forEach((m) => push(d, s, m, 'up'));
+  if (showUp) up.forEach((m) => push(d, s, m, 'up'));
   return out;
 }
 
@@ -195,7 +219,7 @@ function backhaulKbps(enabled, mapStore) {
 
 // Cross-links from the sim to the Glossary.
 const MSG_GLOSSARY = { SPaT: 'SPaT (Signal Phase and Timing)', MAP: 'MAP (Intersection Geometry)', BSM: 'BSM (Basic Safety Message)', PSM: 'PSM (Personal Safety Message)', SRM: 'SRM / SSM', SSM: 'SRM / SSM', TIM: 'TIM (Traveler Information Message)' };
-const DEVICE_GLOSSARY = { tc: 'Traffic Controller (TC)', rsu: 'Roadside Unit (RSU)', obu: 'On-Board Unit (OBU)', ped: 'VRU (Vulnerable Road User)' };
+const DEVICE_GLOSSARY = { tc: 'Traffic Controller (TC)', rsu: 'Roadside Unit (RSU)', obu: 'On-Board Unit (OBU)', ev: 'On-Board Unit (OBU)', bus: 'On-Board Unit (OBU)', ped: 'VRU (Vulnerable Road User)' };
 // Resolve a use-case message/label to a matching Glossary term (or null).
 function glossaryTermFor(label) {
   if (MSG_GLOSSARY[label]) return MSG_GLOSSARY[label];
@@ -215,7 +239,7 @@ function decodePacket(msg, ctx) {
     MAP: { messageId: 'MAP', intersectionId: 12109, refPoint: { lat: 42.30931, lon: -83.06985 }, lanes: 8, laneWidth_cm: 366, revision: 3 },
     BSM: { messageId: 'BSM', tempId: '0x9F3A21', secMark: 34210, lat: 42.30925, lon: -83.06940, speed_mps: 13.4, heading_deg: 271.0, brakeApplied: false },
     PSM: { messageId: 'PSM', userType: 'pedestrian', tempId: '0x4C07', lat: 42.30902, lon: -83.06972, speed_mps: 1.3, heading_deg: 12.0 },
-    SRM: { messageId: 'SRM', requestor: 'ambulance', requestedSignalGroup: 4, eta_s: 6.5, priorityLevel: 7 },
+    SRM: { messageId: 'SRM', requestor: ctx.vehType === 'bus' ? 'publicTransport (transit)' : 'emergency (fire/EMS/police)', requestType: ctx.vehType === 'bus' ? 'priority (extend green)' : 'preemption (immediate green)', requestedSignalGroup: 4, eta_s: 6.5 },
     SSM: { messageId: 'SSM', requestId: 41, status: 'granted', signalGroup: 4 },
     TIM: { messageId: 'TIM', advisory: 'reduced speed / work zone', advisorySpeed_kph: 45, appliesTo: 'lane 2, next 300 m' },
     phase: { control: 'NTCIP 1202 phase/timing (not a J2735 radio message)', phase: 2, state: 'GREEN', greenTime_s: 12 },
@@ -397,6 +421,28 @@ function DeviceArt({ type, model, sig }) {
           <text x="-11" y="3" textAnchor="middle" className="fill-neon-green text-[8px] font-bold">OBU</text>
           <rect x="2" y="-6" width="19" height="12" rx="3" className="fill-cyan-500/20 stroke-neon-cyan" />
           <text x="12" y="3" textAnchor="middle" className="fill-neon-cyan text-[7px] font-bold">ADAS</text>
+          {tag(label)}
+        </g>
+      );
+    case 'ev':
+      return (
+        <g>
+          <rect x="-26" y="-46" width="52" height="92" rx="14" className="fill-slate-100 stroke-red-500" strokeWidth="2.5" />
+          <rect x="-26" y="-4" width="52" height="9" fill="#ef4444" />
+          <rect x="-9" y="-52" width="7" height="7" fill="#ef4444" /><rect x="2" y="-52" width="7" height="7" fill="#3b82f6" />
+          <rect x="-19" y="-34" width="38" height="20" rx="6" className="fill-sky-200/80" />
+          <text x="0" y="30" textAnchor="middle" className="fill-red-600 text-[10px] font-black">EMS</text>
+          {tag(label)}
+        </g>
+      );
+    case 'bus':
+      return (
+        <g>
+          <rect x="-27" y="-50" width="54" height="100" rx="10" className="fill-teal-600 stroke-teal-300" strokeWidth="2.5" />
+          <rect x="-20" y="-40" width="40" height="16" rx="4" className="fill-cyan-100/80" />
+          <rect x="-20" y="-18" width="40" height="12" rx="3" className="fill-cyan-100/50" />
+          <rect x="-20" y="0" width="40" height="12" rx="3" className="fill-cyan-100/50" />
+          <text x="0" y="34" textAnchor="middle" className="fill-white text-[10px] font-black">BUS</text>
           {tag(label)}
         </g>
       );
@@ -623,7 +669,7 @@ function WorldBuilderTab({ openGlossary }) {
     return () => cancelAnimationFrame(simRaf.current);
   }, [sim, paused, speed]);
   // stop simulating if there is nothing left to animate
-  useEffect(() => { if (sim && conns.length === 0 && !devices.some((o) => o.type === 'obu' && o.drive)) { setSim(false); setPaused(false); } }, [sim, conns.length]);
+  useEffect(() => { if (sim && conns.length === 0 && !devices.some((o) => isVehicle(o.type) && o.drive)) { setSim(false); setPaused(false); } }, [sim, conns.length]);
 
   // palette drop
   const placeAt = (type, pos) => (type === 'intersection' ? addIntersection(pos) : addObject(type, pos));
@@ -706,14 +752,14 @@ function WorldBuilderTab({ openGlossary }) {
   // ----- live sim state derived from simT -----
   const phase = (simT / 2.2) % 1;                       // 0..1 packet-flow clock
   const lp = (o) => (o && sim ? liveXY(o, simT) : o ? { x: o.x, y: o.y } : { x: 0, y: 0 });
-  const anyDriving = devices.some((o) => o.type === 'obu' && o.drive);
+  const anyDriving = devices.some((o) => isVehicle(o.type) && o.drive);
   // Range-based connectivity: ephemeral wireless links to every OBU inside an RSU's
   // range circle (unless already manually wired). They form/break as vehicles drive.
   const autoLinks = useMemo(() => {
     if (!sim) return [];
     const out = [];
     const rsus = devices.filter((o) => o.type === 'rsu');
-    const obus = devices.filter((o) => o.type === 'obu');
+    const obus = devices.filter((o) => isVehicle(o.type));
     obus.forEach((ob) => { const op = lp(ob); rsus.forEach((r) => {
       if ((r.x - op.x) ** 2 + (r.y - op.y) ** 2 > RANGE * RANGE) return;
       if (conns.some((c) => (c.from === r.id && c.to === ob.id) || (c.from === ob.id && c.to === r.id))) return;
@@ -721,11 +767,11 @@ function WorldBuilderTab({ openGlossary }) {
     }); });
     return out;
   }, [sim, simT, objects, conns]);
-  const inRange = (rsuId) => sim && (conns.some((c) => (c.from === rsuId || c.to === rsuId) && byId[c.from]?.type === 'obu' || (c.from === rsuId || c.to === rsuId) && byId[c.to]?.type === 'obu') || autoLinks.some((l) => l.from === rsuId));
+  const inRange = (rsuId) => sim && (conns.some((c) => { const other = c.from === rsuId ? byId[c.to] : c.to === rsuId ? byId[c.from] : null; return other && isVehicle(other.type); }) || autoLinks.some((l) => l.from === rsuId));
 
   const paletteGroups = [
     { title: 'Templates', items: ['intersection'] },
-    { title: 'Devices', items: ['tc', 'rsu', 'obu', 'signal', 'ped'] },
+    { title: 'Devices', items: ['tc', 'rsu', 'obu', 'ev', 'bus', 'signal', 'ped'] },
     { title: 'Scenery', items: ['roadH', 'roadV'] },
   ];
 
@@ -881,7 +927,7 @@ function WorldBuilderTab({ openGlossary }) {
                 const wiredToTC = conns.some((c) => { const oth = c.from === o.id ? byId[c.to] : c.to === o.id ? byId[c.from] : null; return oth && oth.type === 'tc'; });
                 if (wiredToTC) sig = phase < 0.5 ? 'green' : phase < 0.62 ? 'yellow' : 'red';
               }
-              const moving = o.type === 'obu' && o.drive;
+              const moving = isVehicle(o.type) && o.drive;
               const pos = lp(o);                       // live position while simulating
               const lockDrag = sim && moving;          // a driving vehicle can't be dragged mid-sim
               return (
@@ -924,7 +970,8 @@ function WorldBuilderTab({ openGlossary }) {
                     const x = st.from.x + (st.to.x - st.from.x) * p, y = st.from.y + (st.to.y - st.from.y) * p;
                     const fault = rsu ? streamFault(rsu, classic, st) : null;
                     const col = fault ? '#f87171' : st.color;
-                    const open = () => setPacketInspect({ msg: st.label, secure: !(fault === 'security'), formatOk: fault !== 'format', fault, aType: a.type, bType: b.type });
+                    const vehType = isVehicle(a.type) ? a.type : isVehicle(b.type) ? b.type : null;
+                    const open = () => setPacketInspect({ msg: st.label, secure: !(fault === 'security'), formatOk: fault !== 'format', fault, aType: a.type, bType: b.type, vehType });
                     return (
                       <g key={c.id + '-' + idx} transform={`translate(${x},${y})`} style={{ cursor: 'pointer' }} onPointerDown={(e) => { e.stopPropagation(); open(); }}>
                         <rect x="-10" y="-10" width="20" height="20" rx="4" fill={col + '55'} stroke={col} strokeWidth="2" className="glow-cyan" />
@@ -996,7 +1043,7 @@ function WorldBuilderTab({ openGlossary }) {
                 {faultText && <div className="rounded-lg border border-red-700/60 bg-red-500/10 p-2.5 text-[12px] text-red-200">⚠ {faultText}</div>}
                 <div>
                   <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-1">Decoded payload (representative)</div>
-                  <div className="rounded-lg border border-zinc-800 bg-black/60 p-3"><pre className="font-mono text-[12px] leading-relaxed whitespace-pre-wrap break-words"><JsonView data={decodePacket(pk.msg, { secure: pk.secure, formatOk: pk.formatOk })} /></pre></div>
+                  <div className="rounded-lg border border-zinc-800 bg-black/60 p-3"><pre className="font-mono text-[12px] leading-relaxed whitespace-pre-wrap break-words"><JsonView data={decodePacket(pk.msg, { secure: pk.secure, formatOk: pk.formatOk, vehType: pk.vehType })} /></pre></div>
                 </div>
                 {gi && gi.format && (
                   <div>
@@ -1102,7 +1149,7 @@ function WorldBuilderTab({ openGlossary }) {
             <SpecSheet type={selObj.type} model={MODELS[selObj.type]?.find((m) => m.id === selObj.modelId)} />
 
             {/* Drive control — turns a static OBU into a moving vehicle */}
-            {selObj.type === 'obu' && (
+            {isVehicle(selObj.type) && (
               <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
                 <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-1.5">Drive</div>
                 <div className="flex gap-1">
@@ -2087,7 +2134,7 @@ PersonalSafetyMessage ::= SEQUENCE {
   …          (path history, activity) OPTIONAL
 }
 — © SAE J2735, paywalled.` },
-    { term: 'SRM / SSM', child: 'SAE J2735', def: 'Signal Request Message (a vehicle asking for priority/preemption) and Signal Status Message (the controller’s response confirming the request state).',
+    { term: 'SRM / SSM', child: 'SAE J2735', def: 'Signal Request Message (a vehicle asking for priority/preemption) and Signal Status Message (the controller’s response). Any OBU can technically transmit an SRM, but the controller only GRANTS it based on the RequestorDescription role plus SCMS credentials: emergency vehicles get preemption (interrupt the cycle), transit buses (and sometimes freight) get priority (extend green / trim red), and ordinary passenger cars are not authorized — their request is ignored.',
       format: `SignalRequestMessage / SignalStatusMessage — representative
 SignalRequestMessage ::= SEQUENCE {
   second     DSecond,
