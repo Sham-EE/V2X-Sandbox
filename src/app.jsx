@@ -277,6 +277,20 @@ function JsonView({ data, depth }) {
    3. WORLD BUILDER
 ===================================================================== */
 const WB = { w: 1000, h: 640 };
+const RANGE = 150;          // RSU wireless range (matches the drawn range circle)
+const SIM_LOOP = 20;        // seconds — the scrub timeline spans one loop
+const DRIVE_V = 95;         // px/sec base vehicle speed
+const DRIVE_DIR = { e: { dx: 1, dy: 0 }, w: { dx: -1, dy: 0 }, n: { dx: 0, dy: -1 }, s: { dx: 0, dy: 1 } };
+const DRIVE_ARROW = { e: '→', w: '←', n: '↑', s: '↓' };
+// Deterministic live position of an object at sim-time t (seconds). Driving OBUs
+// advance along their direction and wrap around the canvas; everything else is static.
+// Being a pure function of t makes the scrub timeline trivially consistent.
+function liveXY(o, t) {
+  if (!o.drive || !DRIVE_DIR[o.drive]) return { x: o.x, y: o.y };
+  const d = DRIVE_DIR[o.drive], W = WB.w - 40, H = WB.h - 40;
+  const wrap = (v, lo, span) => ((v - lo) % span + span) % span + lo;
+  return { x: wrap(o.x + d.dx * DRIVE_V * t, 20, W), y: wrap(o.y + d.dy * DRIVE_V * t, 20, H) };
+}
 let _uid = 0;
 // random suffix so ids never collide with those in a loaded saved world
 const uid = (t) => `${t}-${++_uid}-${Math.random().toString(36).slice(2, 6)}`;
@@ -464,7 +478,8 @@ function WorldBuilderTab({ openGlossary }) {
   const [wiring, setWiring] = useState(null);         // {from, x, y}
   const [sim, setSim] = useState(false);              // "Simulate this world" running?
   const [paused, setPaused] = useState(false);        // freeze the frame (packets stay clickable)
-  const [phase, setPhase] = useState(0);              // looping 0..1 clock for packet flow
+  const [simT, setSimT] = useState(0);                // sim-time in seconds (0..SIM_LOOP), scrubbable
+  const [speed, setSpeed] = useState(1);              // playback speed multiplier
   const [dirMode, setDirMode] = useState(prefs.dirMode || 'both'); // 'fwd' | 'rev' | 'both'
   const [enabled, setEnabled] = useState(prefs.enabled || {});     // per-message on/off (missing = on)
   const [mapStore, setMapStore] = useState(prefs.mapStore || 'rsu'); // MAP geometry: 'rsu' | 'tc'
@@ -597,17 +612,18 @@ function WorldBuilderTab({ openGlossary }) {
     return () => window.removeEventListener('keydown', h);
   }, [sel, removeSelected, undo, redo]);
 
-  // "Simulate this world" — a looping clock that drives packets along every wired link.
-  // Paused holds the current phase (frozen frame) and resumes seamlessly.
+  // "Simulate this world" — advance a deterministic sim-clock that drives both the
+  // packet flow and the moving vehicles. Pausing simply stops advancing simT (frozen
+  // frame); resuming continues; scrubbing sets simT directly. Speed scales the rate.
   useEffect(() => {
     if (!sim || paused) return;
-    const start = performance.now() - phase * 2200;   // resume from the frozen phase
-    const loop = (now) => { setPhase(((now - start) / 2200) % 1); simRaf.current = requestAnimationFrame(loop); };
+    let last = performance.now();
+    const loop = (now) => { const dt = (now - last) / 1000; last = now; setSimT((t) => (t + dt * speed) % SIM_LOOP); simRaf.current = requestAnimationFrame(loop); };
     simRaf.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(simRaf.current);
-  }, [sim, paused]);
-  // stop simulating if all links vanish
-  useEffect(() => { if (sim && conns.length === 0) { setSim(false); setPaused(false); } }, [sim, conns.length]);
+  }, [sim, paused, speed]);
+  // stop simulating if there is nothing left to animate
+  useEffect(() => { if (sim && conns.length === 0 && !devices.some((o) => o.type === 'obu' && o.drive)) { setSim(false); setPaused(false); } }, [sim, conns.length]);
 
   // palette drop
   const placeAt = (type, pos) => (type === 'intersection' ? addIntersection(pos) : addObject(type, pos));
@@ -686,6 +702,26 @@ function WorldBuilderTab({ openGlossary }) {
     if (st.dir === 'down' && classic && !rsuConvert(rsu)) return 'format';    // raw NTCIP never converted
     return null;
   };
+
+  // ----- live sim state derived from simT -----
+  const phase = (simT / 2.2) % 1;                       // 0..1 packet-flow clock
+  const lp = (o) => (o && sim ? liveXY(o, simT) : o ? { x: o.x, y: o.y } : { x: 0, y: 0 });
+  const anyDriving = devices.some((o) => o.type === 'obu' && o.drive);
+  // Range-based connectivity: ephemeral wireless links to every OBU inside an RSU's
+  // range circle (unless already manually wired). They form/break as vehicles drive.
+  const autoLinks = useMemo(() => {
+    if (!sim) return [];
+    const out = [];
+    const rsus = devices.filter((o) => o.type === 'rsu');
+    const obus = devices.filter((o) => o.type === 'obu');
+    obus.forEach((ob) => { const op = lp(ob); rsus.forEach((r) => {
+      if ((r.x - op.x) ** 2 + (r.y - op.y) ** 2 > RANGE * RANGE) return;
+      if (conns.some((c) => (c.from === r.id && c.to === ob.id) || (c.from === ob.id && c.to === r.id))) return;
+      out.push({ id: 'auto-' + r.id + '-' + ob.id, from: r.id, to: ob.id, auto: true });
+    }); });
+    return out;
+  }, [sim, simT, objects, conns]);
+  const inRange = (rsuId) => sim && (conns.some((c) => (c.from === rsuId || c.to === rsuId) && byId[c.from]?.type === 'obu' || (c.from === rsuId || c.to === rsuId) && byId[c.to]?.type === 'obu') || autoLinks.some((l) => l.from === rsuId));
 
   const paletteGroups = [
     { title: 'Templates', items: ['intersection'] },
@@ -771,18 +807,12 @@ function WorldBuilderTab({ openGlossary }) {
           <button onClick={() => exportImage('svg')} title="Export canvas as SVG" className="rounded px-2 py-0.5 text-slate-400 hover:text-white">SVG</button>
           <button onClick={clearAll} className="rounded px-2 py-0.5 text-slate-400 hover:text-neon-red">Clear all</button>
           <span className="text-zinc-700">|</span>
-          <button onClick={() => { if (conns.length) { setSim((s) => !s); setPaused(false); } }} disabled={!conns.length}
-            title={conns.length ? '' : 'Wire at least one link first'}
-            className={'rounded px-2 py-0.5 font-semibold transition ' + (sim ? 'bg-neon-red/20 text-neon-red' : conns.length ? 'bg-neon-cyan/20 text-neon-cyan hover:bg-neon-cyan/30' : 'text-slate-600 cursor-not-allowed')}>
+          <button onClick={() => { const can = conns.length || anyDriving; if (can) { if (!sim) { setSimT(0); setPaused(false); } setSim((s) => !s); } }}
+            disabled={!conns.length && !anyDriving}
+            title={(conns.length || anyDriving) ? '' : 'Wire a link or set a vehicle to Drive first'}
+            className={'rounded px-2 py-0.5 font-semibold transition ' + (sim ? 'bg-neon-red/20 text-neon-red' : (conns.length || anyDriving) ? 'bg-neon-cyan/20 text-neon-cyan hover:bg-neon-cyan/30' : 'text-slate-600 cursor-not-allowed')}>
             {sim ? '■ Stop simulation' : '▶ Simulate this world'}
           </button>
-          {sim && (
-            <button onClick={() => setPaused((p) => !p)} title={paused ? 'Resume' : 'Pause to click packets in a frozen frame'}
-              className={'rounded px-2 py-0.5 font-semibold transition ' + (paused ? 'bg-neon-green/20 text-neon-green hover:bg-neon-green/30' : 'bg-neon-amber/20 text-neon-amber hover:bg-neon-amber/30')}>
-              {paused ? '▶ Resume' : '❚❚ Pause'}
-            </button>
-          )}
-          {sim && paused && <span className="text-neon-amber/80">⏸ frozen — click a packet to inspect it</span>}
         </div>
 
         <div className="h-full rounded-xl border border-zinc-800 bg-zinc-950/40 overflow-hidden"
@@ -808,20 +838,27 @@ function WorldBuilderTab({ openGlossary }) {
               </g>
             ))}
 
-            {/* radio range hint for RSUs (non-interactive so it never blocks canvas clicks) */}
-            {devices.filter((o) => o.type === 'rsu').map((o) => (
-              <circle key={'r' + o.id} cx={o.x} cy={o.y} r="150" fill="#a78bfa10" stroke="#a78bfa" strokeOpacity="0.25" strokeDasharray="4 8" style={{ pointerEvents: 'none' }} />
-            ))}
+            {/* radio range hint for RSUs (brightens when a vehicle is in range) */}
+            {devices.filter((o) => o.type === 'rsu').map((o) => { const hot = inRange(o.id); return (
+              <circle key={'r' + o.id} cx={o.x} cy={o.y} r={RANGE} fill={hot ? '#a78bfa22' : '#a78bfa10'} stroke="#a78bfa"
+                strokeOpacity={hot ? 0.6 : 0.25} strokeDasharray="4 8" style={{ pointerEvents: 'none' }} />
+            ); })}
 
-            {/* connections */}
+            {/* auto range-based links (ephemeral, dashed) */}
+            {autoLinks.map((l) => { const a = lp(byId[l.from]), b = lp(byId[l.to]); return (
+              <line key={l.id} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#a78bfa" strokeWidth="2" strokeDasharray="2 6" opacity="0.7" />
+            ); })}
+
+            {/* connections (endpoints follow moving vehicles during sim) */}
             {conns.map((c) => {
               const a = byId[c.from], b = byId[c.to]; if (!a || !b) return null;
+              const la = lp(a), lb = lp(b);
               const st = CONN_STYLE[connKind(a.type, b.type)];
               const isSel = sel?.kind === 'conn' && sel.id === c.id;
               return (
                 <g key={c.id} style={{ cursor: 'pointer' }} onPointerDown={(e) => { e.stopPropagation(); setSel({ kind: 'conn', id: c.id }); }}>
-                  <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="transparent" strokeWidth="14" />
-                  <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={st.color} strokeWidth={isSel ? 4 : 2.5}
+                  <line x1={la.x} y1={la.y} x2={lb.x} y2={lb.y} stroke="transparent" strokeWidth="14" />
+                  <line x1={la.x} y1={la.y} x2={lb.x} y2={lb.y} stroke={st.color} strokeWidth={isSel ? 4 : 2.5}
                     strokeDasharray={st.dash} className={isSel ? 'glow-cyan' : ''} />
                 </g>
               );
@@ -844,16 +881,22 @@ function WorldBuilderTab({ openGlossary }) {
                 const wiredToTC = conns.some((c) => { const oth = c.from === o.id ? byId[c.to] : c.to === o.id ? byId[c.from] : null; return oth && oth.type === 'tc'; });
                 if (wiredToTC) sig = phase < 0.5 ? 'green' : phase < 0.62 ? 'yellow' : 'red';
               }
+              const moving = o.type === 'obu' && o.drive;
+              const pos = lp(o);                       // live position while simulating
+              const lockDrag = sim && moving;          // a driving vehicle can't be dragged mid-sim
               return (
-                <g key={o.id} transform={`translate(${o.x},${o.y})`} className={'spart ' + (isSel ? 'part-hi' : '')}
-                   style={{ cursor: 'move' }} onPointerDown={(e) => startDrag(o, e)}>
+                <g key={o.id} transform={`translate(${pos.x},${pos.y})`} className={'spart ' + (isSel ? 'part-hi' : '')}
+                   style={{ cursor: lockDrag ? 'pointer' : 'move' }}
+                   onPointerDown={(e) => { if (lockDrag) { e.stopPropagation(); setSel({ kind: 'obj', id: o.id }); } else startDrag(o, e); }}>
                   {/* selection outline + hit padding */}
                   <rect x={-sz.w / 2 - 4} y={-sz.h / 2 - 4} width={sz.w + 8} height={sz.h + 8} rx="8"
                     fill="transparent" stroke={isSel ? '#22d3ee' : 'transparent'} strokeDasharray="6 5" />
                   <DeviceArt type={o.type} model={model} sig={sig} />
+                  {/* drive-direction badge on moving vehicles */}
+                  {moving && <text x={sz.w / 2 + 6} y={-sz.h / 2 + 2} className="fill-neon-cyan text-[14px] font-bold">{DRIVE_ARROW[o.drive]}</text>}
                   {/* wiring port (its own handler pre-empts the group drag) */}
-                  <circle cx="0" cy={-sz.h / 2 - 14} r="6" className="fill-zinc-950 stroke-neon-cyan" strokeWidth="2"
-                    style={{ cursor: 'crosshair' }} onPointerDown={(e) => startWire(o, e)} />
+                  {!lockDrag && <circle cx="0" cy={-sz.h / 2 - 14} r="6" className="fill-zinc-950 stroke-neon-cyan" strokeWidth="2"
+                    style={{ cursor: 'crosshair' }} onPointerDown={(e) => startWire(o, e)} />}
                 </g>
               );
             })}
@@ -869,8 +912,9 @@ function WorldBuilderTab({ openGlossary }) {
                     {upstreamClassic(o.id) && !rsuConvert(o) && <text x={o.x + 20} y={o.y - 30} textAnchor="middle" className="text-[13px]">⚠️</text>}
                   </g>
                 ))}
-                {conns.map((c) => {
-                  const a = byId[c.from], b = byId[c.to]; if (!a || !b) return null;
+                {conns.concat(autoLinks).map((c) => {
+                  const A = byId[c.from], B = byId[c.to]; if (!A || !B) return null;
+                  const a = { ...A, ...lp(A) }, b = { ...B, ...lp(B) };   // live-positioned endpoints
                   const streams = linkStreams(a, b, dirMode, enabled, mapStore);
                   const kind = connKind(a.type, b.type);
                   const rsu = kind === 'wireless' ? (a.type === 'rsu' ? a : b) : null;
@@ -880,7 +924,7 @@ function WorldBuilderTab({ openGlossary }) {
                     const x = st.from.x + (st.to.x - st.from.x) * p, y = st.from.y + (st.to.y - st.from.y) * p;
                     const fault = rsu ? streamFault(rsu, classic, st) : null;
                     const col = fault ? '#f87171' : st.color;
-                    const open = () => setPacketInspect({ msg: st.label, fromType: null, toType: null, secure: !(fault === 'security'), formatOk: fault !== 'format', fault, aType: a.type, bType: b.type });
+                    const open = () => setPacketInspect({ msg: st.label, secure: !(fault === 'security'), formatOk: fault !== 'format', fault, aType: a.type, bType: b.type });
                     return (
                       <g key={c.id + '-' + idx} transform={`translate(${x},${y})`} style={{ cursor: 'pointer' }} onPointerDown={(e) => { e.stopPropagation(); open(); }}>
                         <rect x="-10" y="-10" width="20" height="20" rx="4" fill={col + '55'} stroke={col} strokeWidth="2" className="glow-cyan" />
@@ -895,6 +939,28 @@ function WorldBuilderTab({ openGlossary }) {
             )}
           </svg>
         </div>
+
+        {/* transport bar — pause · speed · scrub timeline (during simulation) */}
+        {sim && (
+          <div className="absolute bottom-4 left-4 z-10 flex items-center gap-3 rounded-xl border border-zinc-700 bg-zinc-950/90 px-3 py-2 text-[11px]"
+            style={{ right: packetInspect ? 388 : 16 }}>
+            <button onClick={() => setPaused((p) => !p)}
+              className={'rounded px-2 py-1 font-semibold ' + (paused ? 'bg-neon-green/20 text-neon-green' : 'bg-neon-amber/20 text-neon-amber')}>
+              {paused ? '▶ Resume' : '❚❚ Pause'}
+            </button>
+            <div className="flex items-center gap-1 text-slate-400">
+              <span>Speed</span>
+              {[0.5, 1, 2, 4].map((s) => (
+                <button key={s} onClick={() => setSpeed(s)} className={'rounded px-1.5 py-0.5 font-mono ' + (speed === s ? 'bg-neon-cyan/20 text-neon-cyan' : 'text-slate-400 hover:text-white')}>{s}×</button>
+              ))}
+            </div>
+            <input type="range" min="0" max={SIM_LOOP} step="0.05" value={simT}
+              onChange={(e) => { setPaused(true); setSimT(parseFloat(e.target.value)); }}
+              className="flex-1 min-w-[120px] accent-cyan-400" />
+            <span className="w-16 shrink-0 text-right font-mono text-slate-400">{simT.toFixed(1)} / {SIM_LOOP}s</span>
+            {paused && <span className="shrink-0 text-neon-amber/80">⏸ click a packet</span>}
+          </div>
+        )}
 
         {objects.length === 0 && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
@@ -1034,6 +1100,21 @@ function WorldBuilderTab({ openGlossary }) {
             )}
 
             <SpecSheet type={selObj.type} model={MODELS[selObj.type]?.find((m) => m.id === selObj.modelId)} />
+
+            {/* Drive control — turns a static OBU into a moving vehicle */}
+            {selObj.type === 'obu' && (
+              <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
+                <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-1.5">Drive</div>
+                <div className="flex gap-1">
+                  {[{ v: null, l: 'Off' }, { v: 'e', l: '→' }, { v: 'w', l: '←' }, { v: 'n', l: '↑' }, { v: 's', l: '↓' }].map((d) => {
+                    const on = (selObj.drive || null) === d.v;
+                    return <button key={d.l} onClick={() => { pushUndo(); setObjects((prev) => prev.map((o) => o.id === selObj.id ? { ...o, drive: d.v } : o)); }}
+                      className={'flex-1 rounded-md border px-2 py-1.5 text-sm font-medium transition ' + (on ? 'border-neon-cyan bg-neon-cyan/15 text-neon-cyan' : 'border-zinc-700 text-slate-300 hover:border-zinc-500')}>{d.l}</button>;
+                  })}
+                </div>
+                <p className="mt-1.5 text-[11px] text-slate-500">A driving vehicle loops across the canvas during simulation — links to any RSU form/break as it passes through range.</p>
+              </div>
+            )}
 
             {/* RSU behaviour toggles — the "what breaks" controls */}
             {selObj.type === 'rsu' && (
