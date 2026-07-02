@@ -1321,6 +1321,12 @@ function MiniScene({ frame }) {
       <ellipse cx={hz.x} cy={G.ewLaneY + 6} rx="48" ry="26" fill="#7dd3fc44" stroke="#7dd3fc" strokeDasharray="4 4" />
       <text x={hz.x} y={G.ewY0 - 8} textAnchor="middle" className="fill-sky-200 text-[12px] font-bold">{hz.label}</text>
     </g>
+  ) : hz.kind === 'curve' ? (
+    <g>
+      <polygon points={`${hz.x},${G.ewY0 - 54} ${hz.x + 22},${G.ewY0 - 32} ${hz.x},${G.ewY0 - 10} ${hz.x - 22},${G.ewY0 - 32}`} fill="#f59e0b" stroke="#111" strokeWidth="1.5" />
+      <path d={`M ${hz.x - 7} ${G.ewY0 - 22} q 0 -16 14 -16`} fill="none" stroke="#111" strokeWidth="2.5" />
+      <text x={hz.x} y={G.ewY0 - 62} textAnchor="middle" className="fill-amber-300 text-[10px] font-bold">{hz.label}</text>
+    </g>
   ) : (
     <g>
       {[0, 1, 2, 3].map((k) => <path key={k} d={`M ${hz.x - 30 + k * 20} ${G.ewLaneY + 16} l -5 15 l 10 0 z`} fill="#f59e0b" stroke="#fff" strokeWidth="1" />)}
@@ -1393,6 +1399,14 @@ function MiniScene({ frame }) {
             <line x1="0" y1="0" x2="0" y2="-14" className="stroke-zinc-300" strokeWidth="2" />
           </g>
           {f.waves && broadcast(G.tower.x, G.tower.y - 8, '#a78bfa', true)}
+        </g>
+      )}
+      {infra === 'rsu' && (
+        <g>
+          <line x1={G.rsu.x} y1={G.rsu.y + 14} x2={G.rsu.x} y2={G.ewY0} className="stroke-zinc-600" strokeWidth="6" />
+          {f.waves && broadcast(G.rsu.x, G.rsu.y, '#a78bfa', true)}
+          <rect x={G.rsu.x - 26} y={G.rsu.y - 15} width="52" height="30" rx="6" className="fill-emerald-500/20 stroke-neon-green" />
+          <text x={G.rsu.x} y={G.rsu.y + 4} textAnchor="middle" className="fill-neon-green text-[10px] font-bold">RSU</text>
         </g>
       )}
 
@@ -1871,6 +1885,59 @@ const SCENARIOS = [
       else if (t < 9) banner = { text: '⚠ TRAIN APPROACHING — stop before the tracks', tone: 'warn' };
       else banner = { text: 'Vehicle held safely as the train passes', tone: 'ok' };
       return { layout: 'cross', infra: 'signals', rail: true, ew: 'red', ns: 'green', cars, packets, banner, waves: t >= 1.5 && t < 2.6 };
+    },
+  },
+  {
+    id: 'csw', category: 'V2I', icon: '🛞', title: 'Curve Speed Warning', tagline: 'Roadside RSU advises a safe speed',
+    duration: 8,
+    why: 'A roadside RSU on the approach to a sharp curve broadcasts a curve-speed advisory. The vehicle receives it and slows to a safe speed before entering the bend — valuable at night, in fog, or for a heavy vehicle that could roll over if it enters too fast.',
+    messages: ['TIM'],
+    frame(t) {
+      const ex = t < 3.5 ? lerp(-40, 330, seg(t, 0, 3.5)) : (t < 5.5 ? lerp(330, 470, easeOut(seg(t, 3.5, 5.5))) : lerp(470, 900, seg(t, 5.5, 8)));
+      const cars = [{ id: 'ego', x: ex, y: G.ewLaneY, or: 'h', kind: 'car', label: 'EGO', alert: t >= 3.4 && t < 5.5 }];
+      const packets = []; let banner;
+      if (t < 1.5) banner = { text: 'A sharp curve lies ahead, out of sight', tone: 'info' };
+      else if (t < 3.2) { packets.push({ ...lerpPt(G.rsu, { x: ex, y: G.ewLaneY }, seg(t, 1.5, 3.2)), label: 'TIM', tone: TONE.violet }); banner = { text: 'A roadside RSU broadcasts a curve-speed advisory', tone: 'info' }; }
+      else if (t < 5.5) banner = { text: 'Advisory: slow to 40 km/h for the curve', tone: 'warn', sub: 'reduce before the bend, not in it' };
+      else banner = { text: 'Took the curve safely at the advised speed', tone: 'ok' };
+      return { layout: 'straightH', infra: 'rsu', cars, packets, hazard: { x: 662, kind: 'curve', label: 'CURVE' }, banner, waves: t >= 1.5 && t < 3.2 };
+    },
+  },
+  {
+    id: 'fsp', category: 'V2I', icon: '🚚', title: 'Freight Signal Priority', tagline: 'Green held for a loaded truck',
+    duration: 10,
+    why: 'A heavy truck is costly and slow to stop and restart. With an authorized freight role it sends an SRM; the controller extends the green (priority, not preemption) so the loaded truck clears without stopping — cutting fuel burn, emissions and brake wear.',
+    messages: ['SRM', 'SSM', 'SPaT'],
+    frame(t) {
+      const tx = lerp(-40, 1000, seg(t, 0, 10));
+      const cars = [{ id: 'frt', x: tx, y: G.ewLaneY, or: 'h', kind: 'truck', label: 'FREIGHT' }];
+      const packets = []; let banner;
+      if (t < 2) banner = { text: 'A loaded truck approaches — the green is about to end', tone: 'info' };
+      else if (t < 3.4) { packets.push({ ...lerpPt({ x: tx, y: G.ewLaneY }, G.rsu, seg(t, 2, 3.4)), label: 'SRM', tone: TONE.cyan }); banner = { text: 'Truck sends an SRM requesting freight priority', tone: 'info' }; }
+      else if (t < 4.6) { packets.push({ ...lerpPt(G.rsu, G.tc, seg(t, 3.4, 4.6)), label: 'SRM', tone: TONE.cyan }); banner = { text: 'RSU relays it → controller extends the green', tone: 'info' }; }
+      else if (t < 5.8) { packets.push({ ...lerpPt(G.tc, { x: tx, y: G.ewLaneY }, seg(t, 4.6, 5.8)), label: 'SSM ✔', tone: TONE.green }); banner = { text: 'TC confirms via SSM · green held for the truck', tone: 'ok' }; }
+      else banner = { text: 'Truck clears without stopping — fuel, emissions & brakes saved', tone: 'ok' };
+      return { layout: 'cross', infra: 'signals', ew: 'green', ns: 'red', cars, packets, banner, waves: t >= 2 && t < 5.8 };
+    },
+  },
+  {
+    id: 'wzws', category: 'V2P', icon: '🦺', title: 'Work-Zone Worker Safety', tagline: 'A road worker’s PSM warns drivers',
+    duration: 9,
+    why: 'A road worker in an active work zone carries a device that broadcasts a PSM. Approaching vehicles are warned to slow and move over, giving workers a protected buffer — even before the driver can see them around equipment.',
+    messages: ['PSM'],
+    frame(t) {
+      const wx = 640;
+      const ex = t < 3.4 ? lerp(-40, 300, seg(t, 0, 3.4)) : lerp(300, 900, seg(t, 3.4, 9));
+      const ey = t < 4 ? G.ewLaneY : (t < 5.5 ? lerp(G.ewLaneY, 250, seg(t, 4, 5.5)) : 250);
+      const warn = t >= 2.6 && t < 6;
+      const cars = [{ id: 'ego', x: ex, y: ey, or: 'h', kind: 'car', label: 'EGO', alert: warn }];
+      const ped = { x: wx, y: 320, broadcasting: true, alert: warn };
+      const packets = []; let banner;
+      if (t < 1.5) banner = { text: 'A vehicle approaches an active work zone', tone: 'info' };
+      else if (t < 2.6) { packets.push({ ...lerpPt({ x: wx, y: 320 }, { x: ex, y: G.ewLaneY }, seg(t, 1.5, 2.6)), label: 'PSM', tone: TONE.amber }); banner = { text: 'A road worker’s device broadcasts a PSM', tone: 'warn' }; }
+      else if (t < 6) banner = { text: '⚠ WORKER NEAR THE ROADWAY — slow down & move over', tone: 'warn' };
+      else banner = { text: 'Passed the work zone safely, giving the worker room', tone: 'ok' };
+      return { layout: 'straightH', infra: 'none', cars, packets, ped, hazard: { x: wx, kind: 'workzone', label: 'WORK' }, banner, waves: t >= 1.5 && t < 6 };
     },
   },
 ];
@@ -2531,11 +2598,102 @@ function AnatomyTab() {
 }
 
 /* =====================================================================
+   5c. TEST YOUR KNOWLEDGE — a gamified quiz over everything.
+===================================================================== */
+const QUIZ = [
+  { q: 'A connected car needs the current colour and countdown of the light ahead to avoid running the red. Which message carries that?', options: ['SPaT', 'MAP', 'BSM', 'PSM'], answer: 0, explain: 'SPaT (Signal Phase and Timing) broadcasts each signal group’s current state and time-to-change.' },
+  { q: 'To know exactly where the stop bar and lane centerlines are, a vehicle needs…', options: ['MAP', 'SPaT', 'TIM', 'SSM'], answer: 0, explain: 'MAP carries the centimetre-accurate intersection geometry — lanes, allowed maneuvers and the stop bar.' },
+  { q: 'An ambulance needs the signal to turn green immediately. What does its OBU send?', options: ['SRM', 'BSM', 'SPaT', 'TIM'], answer: 0, explain: 'A Signal Request Message asks the controller for priority/preemption; an emergency role is granted preemption.' },
+  { q: 'A pedestrian’s phone announces their presence to nearby vehicles using…', options: ['PSM', 'BSM', 'MAP', 'SSM'], answer: 0, explain: 'The Personal Safety Message is broadcast by/for vulnerable road users.' },
+  { q: 'An OBU drops an incoming frame because it can’t verify the signature. Which standard is being enforced?', options: ['IEEE 1609.2', 'NTCIP 1202', 'IEEE 802.3', 'SAE J2735'], answer: 0, explain: 'IEEE 1609.2 requires every over-the-air frame to be signed; unverifiable frames are rejected as possible spoofing.' },
+  { q: 'A Classic (NTCIP-only) controller’s data reaches the vehicle as undecodable bytes. What was skipped at the RSU?', options: ['Protocol conversion (NTCIP 1202 → SAE J2735)', 'Security signing', 'MAP broadcast', 'A GNSS fix'], answer: 0, explain: 'A legacy TC emits NTCIP 1202; the RSU must convert it to standardized SAE J2735 before broadcast.' },
+  { q: 'A vehicle broadcasts its position, speed, heading and brake status ~10× per second. That is a…', options: ['BSM', 'SPaT', 'SRM', 'TIM'], answer: 0, explain: 'The Basic Safety Message is the high-rate vehicle-state broadcast that underpins most V2V safety apps.' },
+  { q: 'A late transit bus wants to EXTEND the green without interrupting the cycle. This is called…', options: ['Signal priority', 'Signal preemption', 'Actuated detection', 'GLOSA'], answer: 0, explain: 'Priority softly extends green (transit/freight). Preemption interrupts the cycle and is for emergency vehicles.' },
+  { q: 'Which vehicle is NOT authorized to be granted a signal-priority SRM?', options: ['Passenger car', 'Transit bus', 'Fire truck', 'Ambulance'], answer: 0, explain: 'A passenger car has no authorized priority role — its request is ignored. Transit gets priority; emergency gets preemption.' },
+  { q: 'Storing the MAP locally on the RSU (instead of the TC) mainly improves…', options: ['Backhaul load & resilience', 'Message security', 'GNSS accuracy', 'The number of lanes'], answer: 0, explain: 'Static geometry broadcast locally cuts constant traffic on the cabinet wire and keeps working if the TC link drops.' },
+  { q: 'Inside the cabinet, which component actually switches field power to the signal head’s R/Y/G?', options: ['Load switch', 'Conflict monitor', 'Detector rack', 'The controller'], answer: 0, explain: 'The load switch (a solid-state relay) switches field power on the controller’s low-voltage command — the controller never drives the LEDs directly.' },
+  { q: 'Which cabinet device drops the intersection to flashing red if it detects conflicting greens?', options: ['Conflict monitor (MMU)', 'Load switch', 'BIU', 'Flasher'], answer: 0, explain: 'The Malfunction Management Unit is the independent watchdog over the load-switch outputs.' },
+  { q: 'A work-zone advisory is delivered to vehicles over the cellular network from a TMC. Which message?', options: ['TIM', 'BSM', 'SPaT', 'PSM'], answer: 0, explain: 'The Traveler Information Message carries work-zone, speed, weather and incident advisories.' },
+  { q: 'GLOSA advises the driver of the ideal speed to…', options: ['Arrive as the light turns green (no stop)', 'Avoid a pedestrian', 'Detect a curve', 'Sign the message'], answer: 0, explain: 'Green Light Optimal Speed Advisory uses SPaT to smooth arrivals, cutting stops, idling and fuel.' },
+];
+
+function QuizTab() {
+  const shuffle = (a) => { const b = a.slice(); for (let i = b.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [b[i], b[j]] = [b[j], b[i]]; } return b; };
+  const [order, setOrder] = useState(() => shuffle(QUIZ.map((_, i) => i)));
+  const [idx, setIdx] = useState(0);
+  const [sel, setSel] = useState(null);
+  const [score, setScore] = useState(0);
+  const [done, setDone] = useState(false);
+  const total = QUIZ.length;
+  const q = QUIZ[order[idx]];
+  const answered = sel !== null;
+  const restart = () => { setOrder(shuffle(QUIZ.map((_, i) => i))); setIdx(0); setSel(null); setScore(0); setDone(false); };
+  const choose = (i) => { if (answered) return; setSel(i); if (i === q.answer) setScore((s) => s + 1); };
+  const next = () => { if (idx + 1 >= total) setDone(true); else { setIdx(idx + 1); setSel(null); } };
+
+  if (done) {
+    const pct = Math.round((score / total) * 100);
+    const msg = pct >= 85 ? 'V2X pro! 🏆' : pct >= 60 ? 'Solid understanding 👍' : 'Keep exploring the tabs and try again.';
+    return (
+      <div className="flex h-full items-center justify-center p-6">
+        <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950/60 p-8 text-center">
+          <div className="text-[11px] uppercase tracking-widest text-neon-cyan">Results</div>
+          <div className="mt-3 text-5xl font-black text-slate-100">{score}<span className="text-slate-500 text-2xl"> / {total}</span></div>
+          <div className="mt-1 text-lg font-semibold" style={{ color: pct >= 85 ? '#34d399' : pct >= 60 ? '#22d3ee' : '#fbbf24' }}>{pct}%</div>
+          <p className="mt-3 text-[14px] text-slate-300">{msg}</p>
+          <button onClick={restart} className="mt-6 w-full rounded-lg bg-neon-cyan px-4 py-2.5 text-sm font-semibold text-zinc-950 hover:brightness-110 glow-cyan">↺ Try again</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full items-center justify-center p-6">
+      <div className="w-full max-w-2xl">
+        <div className="flex items-center justify-between text-[12px] mb-2">
+          <span className="text-slate-400">Question <span className="text-slate-100 font-semibold">{idx + 1}</span> / {total}</span>
+          <span className="rounded-md bg-zinc-900 border border-zinc-700 px-2 py-0.5 font-mono text-neon-green">Score {score}</span>
+        </div>
+        <div className="h-1.5 rounded-full bg-zinc-800 overflow-hidden mb-4"><div className="h-full bg-neon-cyan transition-all" style={{ width: ((idx + (answered ? 1 : 0)) / total) * 100 + '%' }} /></div>
+
+        <div className="rounded-2xl border border-zinc-800 bg-zinc-950/50 p-6">
+          <h3 className="text-[17px] font-semibold text-slate-100 leading-snug">{q.q}</h3>
+          <div className="mt-4 space-y-2">
+            {q.options.map((o, i) => {
+              const correct = i === q.answer;
+              const cls = !answered ? 'border-zinc-700 bg-zinc-900/60 hover:border-neon-cyan/60 text-slate-200'
+                : correct ? 'border-emerald-600 bg-emerald-500/15 text-emerald-100'
+                  : i === sel ? 'border-red-600 bg-red-500/15 text-red-100' : 'border-zinc-800 bg-zinc-900/40 text-slate-500';
+              return (
+                <button key={i} onClick={() => choose(i)} disabled={answered}
+                  className={'w-full flex items-center justify-between gap-3 rounded-lg border px-4 py-3 text-left text-[14px] transition ' + cls}>
+                  <span>{o}</span>
+                  {answered && (correct ? <span className="text-emerald-300">✔</span> : i === sel ? <span className="text-red-300">✗</span> : null)}
+                </button>
+              );
+            })}
+          </div>
+          {answered && (
+            <div className="mt-4">
+              <div className={'rounded-lg border p-3 text-[13px] ' + (sel === q.answer ? 'border-emerald-700/60 bg-emerald-500/10 text-emerald-200' : 'border-amber-700/60 bg-amber-500/10 text-amber-200')}>
+                <span className="font-semibold">{sel === q.answer ? 'Correct. ' : 'Not quite. '}</span>{q.explain}
+              </div>
+              <button onClick={next} className="mt-3 w-full rounded-lg bg-neon-cyan px-4 py-2.5 text-sm font-semibold text-zinc-950 hover:brightness-110 glow-cyan">{idx + 1 >= total ? 'See results →' : 'Next question →'}</button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* =====================================================================
    6. APP SHELL + TOP NAVIGATION
 ===================================================================== */
 const TABS = [
   { id: 'builder', label: 'World Builder', icon: '🛠️' },
   { id: 'cases', label: 'Use Cases', icon: '🎬' },
+  { id: 'quiz', label: 'Test Your Knowledge', icon: '🎯' },
   { id: 'anatomy', label: 'Device Anatomy', icon: '🔩' },
   { id: 'glossary', label: 'V2X Definitions Glossary', icon: '📖' },
 ];
@@ -2570,6 +2728,7 @@ function App() {
       <main className="flex-1 min-h-0">
         {tab === 'builder' && <WorldBuilderTab openGlossary={openGlossary} />}
         {tab === 'cases' && <UseCasesTab openGlossary={openGlossary} />}
+        {tab === 'quiz' && <QuizTab />}
         {tab === 'anatomy' && <AnatomyTab />}
         {tab === 'glossary' && <GlossaryTab target={glossaryTarget} />}
       </main>
