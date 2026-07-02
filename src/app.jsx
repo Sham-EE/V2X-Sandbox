@@ -2311,11 +2311,232 @@ function GlossaryTab({ target }) {
 }
 
 /* =====================================================================
+   5b. DEVICE ANATOMY — annotated cutaways of the real hardware.
+       Flagship: a traffic-controller cabinet you wire up (Controller →
+       Load Switch → Field terminal → conduit up the pole → signal head).
+===================================================================== */
+
+// Clickable, annotated blocks inside the cabinet (front view).
+const CAB_PARTS = [
+  { id: 'power', x: 52, y: 56, w: 300, h: 40, name: 'Main Panel & Power Supply', blurb: 'Brings in AC service with a main breaker and surge/transient protection, and powers the whole cabinet. Field power for the signals is switched downstream by the load switches — not here.' },
+  { id: 'mmu', x: 52, y: 104, w: 300, h: 40, name: 'Conflict Monitor (MMU / CMU)', blurb: 'An independent safety watchdog. It constantly checks the load-switch outputs for conflicting greens or other faults; if it sees one it overrides the controller and drops the intersection to flashing red.' },
+  { id: 'controller', x: 52, y: 156, w: 146, h: 116, name: 'Traffic Controller', blurb: 'The brain. It runs the phase & timing logic and outputs LOW-VOLTAGE logic commands — one per channel — telling each load switch when to energize red, yellow or green. It never switches field power itself.' },
+  { id: 'detector', x: 52, y: 284, w: 146, h: 44, name: 'Detector Rack (BIU)', blurb: 'Houses detector cards / Bus Interface Units that bring in vehicle-detection inputs (loops, video, radar) so the controller knows who is waiting at each approach.' },
+  { id: 'field', x: 52, y: 344, w: 300, h: 64, name: 'Field Terminal Facility', blurb: 'The terminal block where every field circuit lands. The switched load-switch outputs connect here and continue through underground conduit, up the pole, to the signal heads.' },
+];
+// Interactive terminals for the channel-2 wiring example.
+const CAB_TERM = { ctrl: { x: 198, y: 214 }, lsin: { x: 214, y: 210 }, lsout: { x: 330, y: 236 }, field: { x: 214, y: 344 } };
+const CAB_VALID = [['ctrl', 'lsin'], ['lsout', 'field']];
+const pairKey = (a, b) => [a, b].sort().join('|');
+const validCabPair = (a, b) => CAB_VALID.some((p) => pairKey(p[0], p[1]) === pairKey(a, b));
+
+function CabinetDiagram() {
+  const [selPart, setSelPart] = useState(null);
+  const [wires, setWires] = useState([]);       // list of pairKeys
+  const [armed, setArmed] = useState(null);      // terminal id awaiting a partner
+  const [err, setErr] = useState(null);
+  const [phase, setPhase] = useState(0);
+  const raf = useRef(null);
+  const has = (a, b) => wires.includes(pairKey(a, b));
+  const energized = has('ctrl', 'lsin') && has('lsout', 'field');
+
+  useEffect(() => {
+    if (!energized) { setPhase(0); return; }
+    const start = performance.now();
+    const loop = (now) => { setPhase(((now - start) / 1800) % 1); raf.current = requestAnimationFrame(loop); };
+    raf.current = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf.current);
+  }, [energized]);
+
+  const clickTerm = (id) => {
+    setSelPart(null);
+    if (armed == null) { setArmed(id); setErr(null); return; }
+    if (armed === id) { setArmed(null); return; }
+    if (validCabPair(armed, id) && !wires.includes(pairKey(armed, id))) { setWires((w) => [...w, pairKey(armed, id)]); setErr(null); }
+    else if (pairKey(armed, id) === pairKey('ctrl', 'field')) setErr('The controller can’t drive the head directly — its low-voltage command must pass through a load switch first.');
+    else if (!validCabPair(armed, id)) setErr('Those two terminals don’t connect. Follow the path: Controller → Load Switch in, then Load Switch out → Field terminal.');
+    setArmed(null);
+  };
+
+  const sig = energized ? (phase < 0.5 ? 'green' : phase < 0.62 ? 'yellow' : 'red') : null;
+  const litColor = (c) => (sig === c ? { red: '#f87171', yellow: '#fbbf24', green: '#34d399' }[c] : '#27272a');
+  const glow = (c) => (sig === c ? 'glow-' + (c === 'yellow' ? 'amber' : c) : '');
+
+  const Term = ({ id }) => { const t = CAB_TERM[id]; const wired = wires.some((w) => w.split('|').includes(id)); return (
+    <circle cx={t.x} cy={t.y} r="6" className={'cursor-pointer ' + (armed === id ? 'fill-neon-amber' : wired ? 'fill-neon-green' : 'fill-zinc-900')}
+      stroke={armed === id ? '#fbbf24' : '#22d3ee'} strokeWidth="2" onClick={(e) => { e.stopPropagation(); clickTerm(id); }} />
+  ); };
+
+  return (
+    <div className="flex-1 min-w-0 flex">
+      <div className="flex-1 min-w-0 p-4">
+        <div className="h-full rounded-xl border border-zinc-800 bg-zinc-950/40 overflow-hidden">
+          <svg viewBox="0 0 1000 660" className="w-full h-full" onClick={() => setSelPart(null)}>
+            <defs><pattern id="agrid" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0V32" fill="none" stroke="#1e293b" strokeWidth="1" /></pattern></defs>
+            <rect width="1000" height="660" fill="url(#agrid)" />
+            {/* ground + underground */}
+            <rect x="0" y="600" width="1000" height="60" className="fill-zinc-900/70" />
+            <line x1="0" y1="600" x2="1000" y2="600" className="stroke-zinc-700" strokeWidth="2" />
+            <text x="470" y="626" className="fill-slate-500 text-[11px]">underground conduit</text>
+
+            {/* pole + mast arm + signal head (field side) */}
+            <line x1="740" y1="600" x2="740" y2="150" className="stroke-zinc-500" strokeWidth="9" strokeLinecap="round" />
+            <line x1="740" y1="152" x2="600" y2="152" className="stroke-zinc-500" strokeWidth="9" strokeLinecap="round" />
+            <g>
+              <rect x="586" y="158" width="28" height="74" rx="6" className="fill-zinc-950 stroke-zinc-600" strokeWidth="2" />
+              <circle cx="600" cy="176" r="8" fill={litColor('red')} className={glow('red')} />
+              <circle cx="600" cy="196" r="8" fill={litColor('yellow')} className={glow('yellow')} />
+              <circle cx="600" cy="216" r="8" fill={litColor('green')} className={glow('green')} />
+            </g>
+            <text x="760" y="150" className="fill-slate-500 text-[11px]">pole / mast arm → signal head</text>
+
+            {/* conduit run: field terminal → down → underground → up pole → mast arm → head */}
+            <path d="M214 408 V600 H740 V152" fill="none" stroke={energized ? '#34d399' : '#3f3f46'} strokeWidth="3.5"
+              strokeDasharray={energized ? '7 7' : '0'} className={energized ? 'dashflow glow-green' : ''} />
+
+            {/* ---------- cabinet ---------- */}
+            <text x="52" y="34" className="fill-slate-200 text-[13px] font-semibold">Traffic Controller Cabinet (NEMA)</text>
+            <rect x="40" y="42" width="330" height="540" rx="8" className="fill-zinc-900 stroke-zinc-600" strokeWidth="3" />
+            {/* clickable component blocks */}
+            {CAB_PARTS.map((p) => { const on = selPart === p.id; return (
+              <g key={p.id} className="cursor-pointer" onClick={(e) => { e.stopPropagation(); setSelPart(p.id); }}>
+                <rect x={p.x} y={p.y} width={p.w} height={p.h} rx="5" className={(on ? 'stroke-neon-cyan ' : 'stroke-zinc-600 ') + (p.id === 'controller' ? 'fill-emerald-500/10' : 'fill-zinc-800')} strokeWidth={on ? 2.5 : 1.5} />
+                <text x={p.x + 8} y={p.y + p.h / 2 + 4} className="fill-slate-200 text-[11px] font-medium">{p.name}</text>
+              </g>
+            ); })}
+            {/* load switch bay */}
+            <text x="216" y="150" className="fill-slate-400 text-[10px]">Load Switch Bay</text>
+            {[0, 1, 2].map((i) => { const y = 156 + i * 40; const active = i === 1; return (
+              <g key={i}>
+                <rect x={212} y={y} width={140} height={34} rx="4" className={(active ? 'stroke-neon-cyan fill-amber-500/10' : 'stroke-zinc-600 fill-zinc-800')} strokeWidth={active ? 2 : 1.2} onClick={(e) => { e.stopPropagation(); setSelPart('ls'); }} style={{ cursor: 'pointer' }} />
+                <text x={220} y={y + 21} className="fill-slate-200 text-[10px] font-medium">Load Switch {i + 1}{active ? ' · CH2' : ''}</text>
+              </g>
+            ); })}
+
+            {/* wires the user draws */}
+            {wires.map((k) => { const [a, b] = k.split('|'); const A = CAB_TERM[a], B = CAB_TERM[b]; return (
+              <line key={k} x1={A.x} y1={A.y} x2={B.x} y2={B.y} stroke={energized ? '#34d399' : '#22d3ee'} strokeWidth="3" className="glow-cyan" />
+            ); })}
+            {/* live wire preview from the armed terminal */}
+            {armed && <circle cx={CAB_TERM[armed].x} cy={CAB_TERM[armed].y} r="11" fill="none" stroke="#fbbf24" strokeWidth="1.5" className="halo" />}
+            {/* interactive terminals + labels */}
+            <text x={CAB_TERM.ctrl.x - 6} y={CAB_TERM.ctrl.y - 10} textAnchor="end" className="fill-slate-400 text-[9px]">CH2 out</text>
+            <text x={CAB_TERM.lsin.x + 10} y={CAB_TERM.lsin.y - 6} className="fill-slate-400 text-[9px]">in</text>
+            <text x={CAB_TERM.lsout.x + 10} y={CAB_TERM.lsout.y + 4} className="fill-slate-400 text-[9px]">out</text>
+            <text x={CAB_TERM.field.x + 10} y={CAB_TERM.field.y - 6} className="fill-slate-400 text-[9px]">CH2 field</text>
+            <Term id="ctrl" /><Term id="lsin" /><Term id="lsout" /><Term id="field" />
+          </svg>
+        </div>
+      </div>
+
+      {/* right info / wiring panel */}
+      <div className="w-80 shrink-0 border-l border-zinc-800 bg-zinc-950/60 p-4 overflow-auto">
+        {selPart ? (() => { const p = selPart === 'ls' ? { name: 'Load Switch', blurb: 'A solid-state relay. It takes the controller’s low-voltage command for one channel and switches the actual field power (LED driver / line voltage) out to that signal’s red, yellow and green circuits. One load switch per channel.' } : CAB_PARTS.find((x) => x.id === selPart); return (
+          <div>
+            <div className="text-[10px] uppercase tracking-widest text-neon-cyan mb-1">Component</div>
+            <h3 className="text-base font-bold text-slate-100">{p.name}</h3>
+            <p className="mt-2 text-[13px] leading-relaxed text-slate-300">{p.blurb}</p>
+            <button onClick={() => setSelPart(null)} className="mt-4 text-[12px] text-neon-cyan hover:underline">← Back to wiring</button>
+          </div>
+        ); })() : (
+          <div>
+            <div className="flex items-center gap-2 mb-1"><span className="text-lg">🗄️</span><h3 className="text-sm font-semibold text-slate-100">Wire the signal path</h3></div>
+            <p className="text-[12px] text-slate-400 leading-relaxed">Click a <span className="text-neon-cyan">◦ terminal</span>, then a valid partner, to lay a wire. Click any labeled block to learn what it does.</p>
+            <div className="mt-3 space-y-2">
+              {[{ ok: has('ctrl', 'lsin'), t: '1 · Controller CH2 out → Load Switch in' }, { ok: has('lsout', 'field'), t: '2 · Load Switch out → Field terminal' }].map((s) => (
+                <div key={s.t} className={'flex items-start gap-2 rounded-lg border px-3 py-2 text-[12px] ' + (s.ok ? 'border-emerald-700/60 bg-emerald-500/10 text-emerald-200' : 'border-zinc-700 bg-zinc-900/60 text-slate-300')}>
+                  <span>{s.ok ? '✔' : '○'}</span><span>{s.t}</span>
+                </div>
+              ))}
+            </div>
+            {err && <div className="mt-3 rounded-lg border border-red-700/60 bg-red-500/10 p-2.5 text-[12px] text-red-200">⚠ {err}</div>}
+            <div className={'mt-3 rounded-lg border p-3 text-[12px] ' + (energized ? 'border-emerald-600/60 bg-emerald-500/10 text-emerald-200' : 'border-zinc-800 bg-zinc-900/50 text-slate-400')}>
+              {energized ? '✔ Signal head energized. The controller’s command now runs through the load switch, out the field terminals, into underground conduit, up the pole and along the mast arm to the head — which cycles green → yellow → red.' : 'Head is dark — complete both wires to energize it. Notice the controller never touches field power directly.'}
+            </div>
+            <div className="mt-3 flex gap-2">
+              <button onClick={() => { setWires([pairKey('ctrl', 'lsin'), pairKey('lsout', 'field')]); setErr(null); setArmed(null); }} className="flex-1 rounded-lg bg-neon-cyan/20 text-neon-cyan px-3 py-2 text-[13px] font-semibold hover:bg-neon-cyan/30">Auto-wire</button>
+              <button onClick={() => { setWires([]); setErr(null); setArmed(null); }} className="flex-1 rounded-lg border border-zinc-700 px-3 py-2 text-[13px] text-slate-300 hover:border-zinc-500">Reset</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Annotated (non-wiring) internals of a Roadside Unit.
+const RSU_PARTS = [
+  { id: 'host', x: 70, y: 120, w: 150, h: 60, name: 'Host processor', blurb: 'The RSU’s computer — runs the ITS application stack, message forwarding, protocol conversion (NTCIP 1202 → SAE J2735) and the security pipeline.' },
+  { id: 'cv2x', x: 240, y: 96, w: 150, h: 42, name: 'C-V2X PC5 radio', blurb: 'The 5.9 GHz cellular sidelink radio that broadcasts SPaT/MAP and receives BSM/SRM directly from vehicles — no cell tower needed.' },
+  { id: 'dsrc', x: 240, y: 146, w: 150, h: 42, name: 'DSRC 802.11p radio', blurb: 'The Wi-Fi-derived 5.9 GHz radio, used where DSRC (rather than or alongside C-V2X) is deployed.' },
+  { id: 'hsm', x: 70, y: 196, w: 150, h: 44, name: 'Security module (HSM)', blurb: 'A hardware secure element that signs every outgoing frame and verifies incoming ones per IEEE 1609.2, using certificates from the SCMS.' },
+  { id: 'gnss', x: 240, y: 196, w: 150, h: 44, name: 'GNSS receiver', blurb: 'Provides precise time and position so broadcast geometry (MAP) and timestamps line up with reality.' },
+  { id: 'eth', x: 70, y: 256, w: 320, h: 40, name: 'Ethernet / NTCIP backhaul', blurb: 'The wired link to the traffic-controller cabinet — carries NTCIP 1202 from the TC (and SPaT/MAP if the TC generates them).' },
+];
+function RsuDiagram() {
+  const [sel, setSel] = useState(null);
+  const p = sel ? RSU_PARTS.find((x) => x.id === sel) : null;
+  return (
+    <div className="flex-1 min-w-0 flex">
+      <div className="flex-1 min-w-0 p-4">
+        <div className="h-full rounded-xl border border-zinc-800 bg-zinc-950/40 overflow-hidden">
+          <svg viewBox="0 0 480 360" className="w-full h-full" onClick={() => setSel(null)}>
+            <text x="60" y="40" className="fill-slate-200 text-[14px] font-semibold">Roadside Unit — inside</text>
+            {/* antennas */}
+            <line x1="150" y1="96" x2="130" y2="56" className="stroke-neon-green" strokeWidth="2" /><circle cx="130" cy="54" r="3" className="fill-neon-green" />
+            <line x1="330" y1="96" x2="350" y2="56" className="stroke-neon-green" strokeWidth="2" /><circle cx="350" cy="54" r="3" className="fill-neon-green" />
+            <text x="120" y="48" className="fill-slate-500 text-[10px]">antennas</text>
+            <rect x="52" y="64" width="376" height="248" rx="10" className="fill-zinc-900 stroke-neon-green" strokeWidth="2" />
+            {RSU_PARTS.map((r) => { const on = sel === r.id; return (
+              <g key={r.id} className="cursor-pointer" onClick={(e) => { e.stopPropagation(); setSel(r.id); }}>
+                <rect x={r.x} y={r.y} width={r.w} height={r.h} rx="5" className={(on ? 'stroke-neon-cyan ' : 'stroke-zinc-600 ') + 'fill-zinc-800'} strokeWidth={on ? 2.5 : 1.4} />
+                <text x={r.x + r.w / 2} y={r.y + r.h / 2 + 4} textAnchor="middle" className="fill-slate-200 text-[10px] font-medium">{r.name}</text>
+              </g>
+            ); })}
+          </svg>
+        </div>
+      </div>
+      <div className="w-80 shrink-0 border-l border-zinc-800 bg-zinc-950/60 p-4 overflow-auto">
+        {p ? (
+          <div><div className="text-[10px] uppercase tracking-widest text-neon-cyan mb-1">Component</div><h3 className="text-base font-bold text-slate-100">{p.name}</h3><p className="mt-2 text-[13px] leading-relaxed text-slate-300">{p.blurb}</p></div>
+        ) : <div className="text-sm text-slate-500">Click any block inside the RSU to see what it does.</div>}
+      </div>
+    </div>
+  );
+}
+
+function AnatomyTab() {
+  const [device, setDevice] = useState('cabinet');
+  const DEVICES = [
+    { id: 'cabinet', icon: '🗄️', name: 'Traffic Controller Cabinet', sub: 'Wire it up · Controller → Load Switch → head' },
+    { id: 'rsu', icon: '📡', name: 'Roadside Unit (RSU)', sub: 'Annotated internals' },
+  ];
+  return (
+    <div className="flex h-full min-h-0">
+      <div className="w-64 shrink-0 border-r border-zinc-800 bg-zinc-950/60 p-3 overflow-auto">
+        <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-400 mb-1 px-1">Device Anatomy</h2>
+        <p className="text-[11px] text-slate-500 mb-3 px-1">Cutaways of the real hardware. Pick a device, click parts to learn them.</p>
+        {DEVICES.map((d) => (
+          <button key={d.id} onClick={() => setDevice(d.id)}
+            className={'w-full mb-2 rounded-xl border p-3 text-left transition ' + (device === d.id ? 'border-neon-cyan bg-neon-cyan/10' : 'border-zinc-800 bg-zinc-900/50 hover:border-zinc-600')}>
+            <div className="flex items-center gap-2"><span className="text-lg">{d.icon}</span><span className="text-[13px] font-semibold text-slate-100">{d.name}</span></div>
+            <div className="mt-1 text-[11px] text-slate-400">{d.sub}</div>
+          </button>
+        ))}
+        <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-[11px] text-slate-400 leading-relaxed">More devices (OBU, the full mast-arm assembly) can be added here as the section grows.</div>
+      </div>
+      {device === 'cabinet' ? <CabinetDiagram /> : <RsuDiagram />}
+    </div>
+  );
+}
+
+/* =====================================================================
    6. APP SHELL + TOP NAVIGATION
 ===================================================================== */
 const TABS = [
   { id: 'builder', label: 'World Builder', icon: '🛠️' },
   { id: 'cases', label: 'Use Cases', icon: '🎬' },
+  { id: 'anatomy', label: 'Device Anatomy', icon: '🔩' },
   { id: 'glossary', label: 'V2X Definitions Glossary', icon: '📖' },
 ];
 
@@ -2349,6 +2570,7 @@ function App() {
       <main className="flex-1 min-h-0">
         {tab === 'builder' && <WorldBuilderTab openGlossary={openGlossary} />}
         {tab === 'cases' && <UseCasesTab openGlossary={openGlossary} />}
+        {tab === 'anatomy' && <AnatomyTab />}
         {tab === 'glossary' && <GlossaryTab target={glossaryTarget} />}
       </main>
     </div>
