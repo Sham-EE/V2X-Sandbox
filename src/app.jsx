@@ -463,6 +463,7 @@ function WorldBuilderTab({ openGlossary }) {
   const drag = useRef(null);                          // {id, ox, oy, pre, moved}
   const [wiring, setWiring] = useState(null);         // {from, x, y}
   const [sim, setSim] = useState(false);              // "Simulate this world" running?
+  const [paused, setPaused] = useState(false);        // freeze the frame (packets stay clickable)
   const [phase, setPhase] = useState(0);              // looping 0..1 clock for packet flow
   const [dirMode, setDirMode] = useState(prefs.dirMode || 'both'); // 'fwd' | 'rev' | 'both'
   const [enabled, setEnabled] = useState(prefs.enabled || {});     // per-message on/off (missing = on)
@@ -597,15 +598,16 @@ function WorldBuilderTab({ openGlossary }) {
   }, [sel, removeSelected, undo, redo]);
 
   // "Simulate this world" — a looping clock that drives packets along every wired link.
+  // Paused holds the current phase (frozen frame) and resumes seamlessly.
   useEffect(() => {
-    if (!sim) return;
-    const start = performance.now();
+    if (!sim || paused) return;
+    const start = performance.now() - phase * 2200;   // resume from the frozen phase
     const loop = (now) => { setPhase(((now - start) / 2200) % 1); simRaf.current = requestAnimationFrame(loop); };
     simRaf.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(simRaf.current);
-  }, [sim]);
+  }, [sim, paused]);
   // stop simulating if all links vanish
-  useEffect(() => { if (sim && conns.length === 0) setSim(false); }, [sim, conns.length]);
+  useEffect(() => { if (sim && conns.length === 0) { setSim(false); setPaused(false); } }, [sim, conns.length]);
 
   // palette drop
   const placeAt = (type, pos) => (type === 'intersection' ? addIntersection(pos) : addObject(type, pos));
@@ -769,11 +771,18 @@ function WorldBuilderTab({ openGlossary }) {
           <button onClick={() => exportImage('svg')} title="Export canvas as SVG" className="rounded px-2 py-0.5 text-slate-400 hover:text-white">SVG</button>
           <button onClick={clearAll} className="rounded px-2 py-0.5 text-slate-400 hover:text-neon-red">Clear all</button>
           <span className="text-zinc-700">|</span>
-          <button onClick={() => { if (conns.length) setSim((s) => !s); }} disabled={!conns.length}
+          <button onClick={() => { if (conns.length) { setSim((s) => !s); setPaused(false); } }} disabled={!conns.length}
             title={conns.length ? '' : 'Wire at least one link first'}
             className={'rounded px-2 py-0.5 font-semibold transition ' + (sim ? 'bg-neon-red/20 text-neon-red' : conns.length ? 'bg-neon-cyan/20 text-neon-cyan hover:bg-neon-cyan/30' : 'text-slate-600 cursor-not-allowed')}>
             {sim ? '■ Stop simulation' : '▶ Simulate this world'}
           </button>
+          {sim && (
+            <button onClick={() => setPaused((p) => !p)} title={paused ? 'Resume' : 'Pause to click packets in a frozen frame'}
+              className={'rounded px-2 py-0.5 font-semibold transition ' + (paused ? 'bg-neon-green/20 text-neon-green hover:bg-neon-green/30' : 'bg-neon-amber/20 text-neon-amber hover:bg-neon-amber/30')}>
+              {paused ? '▶ Resume' : '❚❚ Pause'}
+            </button>
+          )}
+          {sim && paused && <span className="text-neon-amber/80">⏸ frozen — click a packet to inspect it</span>}
         </div>
 
         <div className="h-full rounded-xl border border-zinc-800 bg-zinc-950/40 overflow-hidden"
@@ -854,7 +863,7 @@ function WorldBuilderTab({ openGlossary }) {
               <g>
                 {devices.filter((o) => o.type === 'rsu').map((o) => (
                   <g key={o.id + 'rsu'} style={{ pointerEvents: 'none' }}>
-                    {[0, 1].map((k) => <circle key={k} cx={o.x} cy={o.y} r={22 + k * 16} fill="none" stroke="#a78bfa" strokeWidth="2" opacity="0.5" className="radiowave" style={{ animationDelay: k * 0.4 + 's' }} />)}
+                    {[0, 1].map((k) => <circle key={k} cx={o.x} cy={o.y} r={22 + k * 16} fill="none" stroke="#a78bfa" strokeWidth="2" opacity="0.5" className={paused ? '' : 'radiowave'} style={{ animationDelay: k * 0.4 + 's' }} />)}
                     {/* security / conversion status badges */}
                     <text x={o.x} y={o.y - 30} textAnchor="middle" className="text-[13px]">{rsuSecure(o) ? '🔒' : '🔓'}</text>
                     {upstreamClassic(o.id) && !rsuConvert(o) && <text x={o.x + 20} y={o.y - 30} textAnchor="middle" className="text-[13px]">⚠️</text>}
