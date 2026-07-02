@@ -114,23 +114,61 @@ const MODELS = {
 function connKind(a, b) {
   const s = new Set([a, b]);
   if (s.has('tc') && s.has('rsu')) return 'ethernet';
-  if (s.has('rsu') && (s.has('obu') || s.has('ped'))) return 'wireless';
+  if (s.has('ped')) return 'v2p';
+  if (a === 'obu' && b === 'obu') return 'v2v';
+  if (s.has('rsu') && s.has('obu')) return 'wireless';
   if (s.has('tc') && s.has('signal')) return 'signal';
   return 'generic';
 }
 const CONN_STYLE = {
   ethernet: { color: '#f472b6', dash: '0', label: 'Ethernet · NTCIP 1202' },
   wireless: { color: '#a78bfa', dash: '3 7', label: 'C-V2X · SAE J2735' },
+  v2v:      { color: '#34d399', dash: '3 7', label: 'V2V · BSM' },
+  v2p:      { color: '#fbbf24', dash: '3 7', label: 'V2P · PSM' },
   signal:   { color: '#64748b', dash: '0', label: 'Signal control' },
   generic:  { color: '#64748b', dash: '4 6', label: 'link' },
 };
-const PACKET_LABEL = { ethernet: 'NTCIP', wireless: 'J2735', signal: 'phase', generic: 'data' };
 
-// Orient a link so simulated packets flow the way real V2X data would:
-// upstream (TC) → RSU → downstream (OBU / VRU).
+// SAE J2735 messages the user can fine-tune, and their packet colors.
+const ALL_MSGS = ['SPaT', 'MAP', 'TIM', 'SSM', 'BSM', 'SRM', 'PSM'];
+const MSG_COLOR = { SPaT: '#22d3ee', MAP: '#22d3ee', TIM: '#a78bfa', SSM: '#34d399', BSM: '#34d399', SRM: '#fbbf24', PSM: '#fbbf24', data: '#64748b' };
+
+// Orient a wired link so packets flow upstream (TC) → RSU → downstream (OBU/VRU).
 function orientLink(a, b) {
   const rank = (t) => (t === 'tc' ? 0 : t === 'rsu' ? 1 : 2);
   return rank(a.type) <= rank(b.type) ? [a, b] : [b, a];
+}
+
+// Packet streams for one link, honoring the direction mode and enabled messages.
+// dir: 'fwd' = infrastructure→vehicle · 'rev' = vehicle→infrastructure · 'both'.
+// Returns [{ from:{x,y}, to:{x,y}, label, color }].
+function linkStreams(a, b, dir, enabled) {
+  const on = (m) => enabled[m] !== false;
+  const showDown = dir === 'fwd' || dir === 'both';
+  const showUp = dir === 'rev' || dir === 'both';
+  const out = [];
+  const push = (from, to, m) => { if (on(m)) out.push({ from: { x: from.x, y: from.y }, to: { x: to.x, y: to.y }, label: m, color: MSG_COLOR[m] }); };
+  const kind = connKind(a.type, b.type);
+
+  if (kind === 'v2p') {                          // PSM broadcast from the pedestrian
+    const ped = a.type === 'ped' ? a : b, other = a.type === 'ped' ? b : a;
+    if (showUp) push(ped, other, 'PSM');
+    return out;
+  }
+  if (kind === 'v2v') {                          // BSM exchanged both ways
+    if (showUp) { push(a, b, 'BSM'); push(b, a, 'BSM'); }
+    return out;
+  }
+  if (kind === 'signal' || kind === 'generic') {
+    if (showDown) out.push({ from: { x: a.x, y: a.y }, to: { x: b.x, y: b.y }, label: 'data', color: MSG_COLOR.data });
+    return out;
+  }
+  // ethernet / wireless — real bidirectional V2I traffic
+  const [s, d] = orientLink(a, b);
+  const down = kind === 'wireless' ? ['SPaT', 'MAP', 'TIM', 'SSM'] : ['SPaT', 'MAP', 'SSM'];
+  if (showDown) down.forEach((m) => push(s, d, m));
+  if (showUp) ['BSM', 'SRM'].forEach((m) => push(d, s, m));
+  return out;
 }
 
 /* =====================================================================
@@ -155,7 +193,13 @@ function Segmented({ value, onChange, options }) {
 ===================================================================== */
 const WB = { w: 1000, h: 640 };
 let _uid = 0;
-const uid = (t) => `${t}-${++_uid}`;
+// random suffix so ids never collide with those in a loaded saved world
+const uid = (t) => `${t}-${++_uid}-${Math.random().toString(36).slice(2, 6)}`;
+
+// Persist saved worlds in localStorage (guarded for the SSR render check).
+const WORLDS_KEY = 'v2x_worlds_v1';
+const loadWorlds = () => { try { return JSON.parse(localStorage.getItem(WORLDS_KEY) || '[]'); } catch (e) { return []; } };
+const saveWorlds = (list) => { try { localStorage.setItem(WORLDS_KEY, JSON.stringify(list)); } catch (e) {} };
 
 // Convert a client (screen) point to SVG viewBox coordinates, handling any
 // scaling/letterboxing via the SVG's own coordinate transform matrix.
@@ -281,6 +325,11 @@ function WorldBuilderTab() {
   const [wiring, setWiring] = useState(null);         // {from, x, y}
   const [sim, setSim] = useState(false);              // "Simulate this world" running?
   const [phase, setPhase] = useState(0);              // looping 0..1 clock for packet flow
+  const [dirMode, setDirMode] = useState('both');     // 'fwd' | 'rev' | 'both'
+  const [enabled, setEnabled] = useState({});         // per-message on/off (missing = on)
+  const [worlds, setWorlds] = useState(loadWorlds);   // saved worlds (localStorage)
+  const [activeId, setActiveId] = useState(null);     // currently-loaded world id
+  const [worldName, setWorldName] = useState('');
   const simRaf = useRef(null);
   const svgRef = useRef(null);
 
@@ -307,6 +356,21 @@ function WorldBuilderTab() {
     }
     setSel(null);
   }, [sel]);
+
+  // ----- world management (save / load / delete / new) -----
+  const persistWorlds = (list) => { setWorlds(list); saveWorlds(list); };
+  const newWorld = () => { setObjects([]); setConns([]); setSel(null); setSim(false); setActiveId(null); setWorldName(''); };
+  const saveWorld = () => {
+    const name = (worldName.trim() || 'Untitled world');
+    if (activeId && worlds.some((w) => w.id === activeId)) {
+      persistWorlds(worlds.map((w) => w.id === activeId ? { ...w, name, objects, conns } : w));
+    } else {
+      const w = { id: 'w-' + Date.now().toString(36), name, objects, conns };
+      persistWorlds([...worlds, w]); setActiveId(w.id);
+    }
+  };
+  const loadWorld = (w) => { setObjects(w.objects || []); setConns(w.conns || []); setSel(null); setSim(false); setActiveId(w.id); setWorldName(w.name); };
+  const deleteWorld = (id) => { persistWorlds(worlds.filter((w) => w.id !== id)); if (activeId === id) newWorld(); };
 
   // keyboard delete
   useEffect(() => {
@@ -391,6 +455,32 @@ function WorldBuilderTab() {
     <div className="flex h-full min-h-0">
       {/* palette */}
       <div className="w-56 shrink-0 border-r border-zinc-800 bg-zinc-950/60 p-3 overflow-auto">
+        {/* Worlds: save / load / delete / switch */}
+        <div className="mb-4 pb-3 border-b border-zinc-800">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-400">Worlds</h2>
+            <button onClick={newWorld} className="text-[11px] text-neon-cyan hover:underline">+ New</button>
+          </div>
+          <div className="flex gap-1">
+            <input value={worldName} onChange={(e) => setWorldName(e.target.value)} placeholder="Name this world"
+              className="min-w-0 flex-1 rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-[12px] text-slate-200 placeholder:text-slate-500 focus:border-neon-cyan focus:outline-none" />
+            <button onClick={saveWorld} className="shrink-0 rounded bg-neon-cyan/20 text-neon-cyan px-2 py-1 text-[11px] font-semibold hover:bg-neon-cyan/30">
+              {activeId && worlds.some((w) => w.id === activeId) ? 'Update' : 'Save'}
+            </button>
+          </div>
+          {worlds.length > 0 ? (
+            <div className="mt-2 space-y-1">
+              {worlds.map((w) => (
+                <div key={w.id} className={'flex items-center gap-1 rounded px-2 py-1 ' + (activeId === w.id ? 'bg-neon-cyan/10' : 'hover:bg-zinc-900')}>
+                  <button onClick={() => loadWorld(w)} className={'min-w-0 flex-1 truncate text-left text-[12px] ' + (activeId === w.id ? 'text-neon-cyan' : 'text-slate-200')}>{w.name}</button>
+                  <span className="shrink-0 text-[9px] text-slate-500">{(w.objects || []).length}d·{(w.conns || []).length}l</span>
+                  <button onClick={() => deleteWorld(w.id)} title="Delete world" className="shrink-0 text-slate-500 hover:text-neon-red text-[12px]">✕</button>
+                </div>
+              ))}
+            </div>
+          ) : <p className="mt-2 text-[11px] text-slate-500">No saved worlds yet — build one, name it, and Save.</p>}
+        </div>
+
         <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-400 mb-2">Palette</h2>
         <p className="text-[11px] text-slate-500 mb-3">Drag onto the canvas (or click to drop at center).</p>
         {paletteGroups.map((g) => (
@@ -507,16 +597,15 @@ function WorldBuilderTab() {
                 )))}
                 {conns.map((c) => {
                   const a = byId[c.from], b = byId[c.to]; if (!a || !b) return null;
-                  const kind = connKind(a.type, b.type);
-                  const [s, d] = orientLink(a, b);
-                  const st = CONN_STYLE[kind];
-                  return [0, 0.5].map((off, i) => {
-                    const p = (phase + off) % 1;
-                    const x = s.x + (d.x - s.x) * p, y = s.y + (d.y - s.y) * p;
+                  const streams = linkStreams(a, b, dirMode, enabled);
+                  return streams.map((st, idx) => {
+                    // stagger each message along the link so they read as a train
+                    const p = (phase + idx / streams.length) % 1;
+                    const x = st.from.x + (st.to.x - st.from.x) * p, y = st.from.y + (st.to.y - st.from.y) * p;
                     return (
-                      <g key={c.id + '-' + i} transform={`translate(${x},${y})`}>
-                        <rect x="-10" y="-10" width="20" height="20" rx="5" fill={st.color + '55'} stroke={st.color} strokeWidth="2" className="glow-cyan" />
-                        {i === 0 && <text x="0" y="-14" textAnchor="middle" fill={st.color} className="text-[9px] font-bold">{PACKET_LABEL[kind]}</text>}
+                      <g key={c.id + '-' + idx} transform={`translate(${x},${y})`}>
+                        <rect x="-9" y="-9" width="18" height="18" rx="4" fill={st.color + '55'} stroke={st.color} strokeWidth="2" className="glow-cyan" />
+                        <text x="0" y="-12" textAnchor="middle" fill={st.color} className="text-[8px] font-bold">{st.label}</text>
                       </g>
                     );
                   });
@@ -537,8 +626,31 @@ function WorldBuilderTab() {
         )}
       </div>
 
-      {/* properties / spec panel */}
-      <div className="w-80 shrink-0 border-l border-zinc-800 bg-zinc-950/60 p-4 overflow-auto">
+      {/* properties / spec + simulation panel */}
+      <div className="w-80 shrink-0 border-l border-zinc-800 bg-zinc-950/60 p-4 overflow-auto flex flex-col">
+        {/* Simulation controls */}
+        <div className="mb-4 pb-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2 mb-2"><span className="text-lg">🎬</span><h3 className="text-sm font-semibold text-slate-100">Simulation</h3></div>
+          <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-1">Direction</div>
+          <Segmented value={dirMode} onChange={setDirMode}
+            options={[{ value: 'fwd', label: 'Forward' }, { value: 'rev', label: 'Reverse' }, { value: 'both', label: 'Both' }]} />
+          <p className="mt-1.5 text-[11px] leading-relaxed text-slate-400">
+            <span className="text-slate-300">Forward</span>: infrastructure → vehicle (SPaT/MAP/TIM). <span className="text-slate-300">Reverse</span>: vehicle/VRU → infrastructure (BSM/SRM/PSM).
+          </p>
+          <div className="text-[10px] uppercase tracking-widest text-slate-500 mt-3 mb-1.5">SAE J2735 messages</div>
+          <div className="flex flex-wrap gap-1.5">
+            {ALL_MSGS.map((mm) => {
+              const isOn = enabled[mm] !== false;
+              return (
+                <button key={mm} onClick={() => setEnabled((e) => ({ ...e, [mm]: !isOn }))}
+                  style={isOn ? { color: MSG_COLOR[mm], borderColor: MSG_COLOR[mm] } : {}}
+                  className={'rounded-md border px-2 py-1 font-mono text-[11px] transition ' + (isOn ? 'bg-white/5' : 'border-zinc-700 text-slate-600 line-through')}>{mm}</button>
+              );
+            })}
+          </div>
+          <p className="mt-2 text-[11px] text-slate-500">Pick messages, then hit <span className="text-neon-cyan">▶ Simulate this world</span> in the toolbar.</p>
+        </div>
+
         {!sel && <div className="text-sm text-slate-500">Select a device or link to see its properties &amp; spec sheet.</div>}
 
         {selConn && byId[selConn.from] && byId[selConn.to] && (() => {
