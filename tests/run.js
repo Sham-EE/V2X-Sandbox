@@ -107,11 +107,14 @@ ok(!m.validCabPair('ctrl', 'field'), 'controller cannot wire straight to the hea
 
 // ---------- 8. scenarios ----------
 console.log('• use-case scenarios');
-ok(m.SCENARIOS.length >= 23, `scenario count (${m.SCENARIOS.length}) ≥ 23`);
+// some scenarios bundle several similar animations under a variant toggle, so
+// count total simulations (a scenario contributes its variant count, else 1).
+const simCount = m.SCENARIOS.reduce((n, s) => n + (s.variants ? s.variants.length : 1), 0);
+ok(simCount >= 23, `total simulations (${simCount}) ≥ 23`);
 let frameErrs = 0;
 m.SCENARIOS.forEach((sc) => {
-  const runs = sc.variants ? sc.variants.map((v) => v.frame) : [sc.frame];
-  runs.forEach((frame) => { for (let t = 0; t <= sc.duration; t += sc.duration / 8) { try { RS.renderToStaticMarkup(el(m.MiniScene, { frame: frame(t) })); } catch (e) { frameErrs++; console.log('  \x1b[31m✗\x1b[0m scenario ' + sc.id + ' @' + t.toFixed(1) + ': ' + e.message); } } });
+  const runs = sc.variants ? sc.variants : [sc];   // each variant carries its own frame + duration
+  runs.forEach((r) => { const dur = r.duration || sc.duration; for (let t = 0; t <= dur; t += dur / 8) { try { RS.renderToStaticMarkup(el(m.MiniScene, { frame: r.frame(t) })); } catch (e) { frameErrs++; console.log('  \x1b[31m✗\x1b[0m scenario ' + sc.id + ' @' + t.toFixed(1) + ': ' + e.message); } } });
 });
 ok(frameErrs === 0, 'all scenario/variant frames render across their timeline');
 ok(m.SCENARIOS.every((s) => ['V2I', 'V2V', 'V2P', 'V2N'].includes(s.category)), 'every scenario has a valid category');

@@ -3512,82 +3512,236 @@ function MiniScene({
   }, p.label))));
 }
 const SCENARIOS = [{
-  id: 'srm',
+  // The same SRM, three RequestorDescription roles — toggle to see how the
+  // controller grants each: emergency = preemption, transit/freight = priority.
+  id: 'priority',
   category: 'V2I',
-  icon: '🚑',
-  title: 'Emergency Vehicle Preemption',
-  tagline: 'SRM → green for the ambulance',
+  icon: '🚦',
+  title: 'Signal Priority & Preemption',
+  tagline: 'One SRM — three roles, three grants',
   duration: 11,
-  why: 'An emergency vehicle’s OBU asks the intersection for priority using a Signal Request Message (SRM). The RSU relays it to the controller, which preempts the signal to green and confirms with an SSM — the ambulance never has to stop or run a red.',
-  messages: ['SRM', 'SSM', 'SPaT'],
-  frame(t) {
-    const green = t >= 5.2;
-    let ax;
-    if (t < 2.5) ax = lerp(-40, G.ewStop, seg(t, 0, 2.5));else if (t < 5.5) ax = G.ewStop;else ax = lerp(G.ewStop, 980, seg(t, 5.5, 11));
-    const cars = [{
-      id: 'amb',
-      x: ax,
-      y: G.ewLaneY,
-      or: 'h',
-      kind: 'ambulance',
-      label: 'EMS',
-      alert: t >= 1 && t < 5.5
-    }];
-    const packets = [];
-    let banner;
-    if (t < 2.5) banner = {
-      text: 'Emergency vehicle approaches a RED light',
-      tone: 'warn'
-    };else if (t < 4) {
-      packets.push({
-        ...lerpPt({
-          x: ax,
-          y: G.ewLaneY
-        }, G.rsu, seg(t, 2.5, 4)),
-        label: 'SRM',
-        tone: TONE.cyan
-      });
-      banner = {
-        text: 'OBU broadcasts an SRM (Signal Request Message)',
-        tone: 'info'
-      };
-    } else if (t < 5.2) {
-      packets.push({
-        ...lerpPt(G.rsu, G.tc, seg(t, 4, 5.2)),
-        label: 'SRM',
-        tone: TONE.cyan
-      });
-      banner = {
-        text: 'RSU relays the SRM to the Traffic Controller',
-        tone: 'info'
-      };
-    } else if (t < 6.4) {
-      packets.push({
-        ...lerpPt(G.tc, {
-          x: ax,
-          y: G.ewLaneY
-        }, seg(t, 5.2, 6.4)),
-        label: 'SSM ✔',
-        tone: TONE.green
-      });
-      banner = {
-        text: 'TC grants priority · returns SSM · signal turns GREEN',
+  variants: [{
+    id: 'emergency',
+    label: 'Emergency · preemption',
+    tagline: 'SRM → light preempted to green',
+    duration: 11,
+    why: 'An emergency vehicle’s OBU asks the intersection for priority using a Signal Request Message (SRM). The RSU relays it to the controller, which PREEMPTS the signal — interrupting the whole cycle to give the ambulance a green — and confirms with an SSM. The ambulance never has to stop or run a red.',
+    messages: ['SRM', 'SSM', 'SPaT'],
+    frame(t) {
+      const green = t >= 5.2;
+      let ax;
+      if (t < 2.5) ax = lerp(-40, G.ewStop, seg(t, 0, 2.5));else if (t < 5.5) ax = G.ewStop;else ax = lerp(G.ewStop, 980, seg(t, 5.5, 11));
+      const cars = [{
+        id: 'amb',
+        x: ax,
+        y: G.ewLaneY,
+        or: 'h',
+        kind: 'ambulance',
+        label: 'EMS',
+        alert: t >= 1 && t < 5.5
+      }];
+      const packets = [];
+      let banner;
+      if (t < 2.5) banner = {
+        text: 'Emergency vehicle approaches a RED light',
+        tone: 'warn'
+      };else if (t < 4) {
+        packets.push({
+          ...lerpPt({
+            x: ax,
+            y: G.ewLaneY
+          }, G.rsu, seg(t, 2.5, 4)),
+          label: 'SRM',
+          tone: TONE.cyan
+        });
+        banner = {
+          text: 'OBU broadcasts an SRM (Signal Request Message)',
+          tone: 'info'
+        };
+      } else if (t < 5.2) {
+        packets.push({
+          ...lerpPt(G.rsu, G.tc, seg(t, 4, 5.2)),
+          label: 'SRM',
+          tone: TONE.cyan
+        });
+        banner = {
+          text: 'RSU relays the SRM to the Traffic Controller',
+          tone: 'info'
+        };
+      } else if (t < 6.4) {
+        packets.push({
+          ...lerpPt(G.tc, {
+            x: ax,
+            y: G.ewLaneY
+          }, seg(t, 5.2, 6.4)),
+          label: 'SSM ✔',
+          tone: TONE.green
+        });
+        banner = {
+          text: 'TC grants preemption · returns SSM · signal turns GREEN',
+          tone: 'ok'
+        };
+      } else banner = {
+        text: 'Ambulance clears the intersection without stopping',
         tone: 'ok'
       };
-    } else banner = {
-      text: 'Ambulance clears the intersection without stopping',
-      tone: 'ok'
-    };
-    return {
-      cars,
-      packets,
-      ew: green ? 'green' : 'red',
-      ns: green ? 'red' : 'green',
-      banner,
-      rsuActive: true,
-      waves: t > 2.5 && t < 6.4
-    };
-  }
+      return {
+        cars,
+        packets,
+        ew: green ? 'green' : 'red',
+        ns: green ? 'red' : 'green',
+        banner,
+        rsuActive: true,
+        waves: t > 2.5 && t < 6.4
+      };
+    }
+  }, {
+    id: 'transit',
+    label: 'Transit · priority',
+    tagline: 'SRM → green extended for the bus',
+    duration: 10,
+    why: 'A behind-schedule bus sends an SRM requesting priority. Unlike full emergency preemption, the controller simply EXTENDS the current green (or trims the red) so the bus clears without stopping — improving on-time performance without disrupting the whole cycle.',
+    messages: ['SRM', 'SSM', 'SPaT'],
+    frame(t) {
+      const bx = lerp(-40, 980, seg(t, 0, 10));
+      const cars = [{
+        id: 'bus',
+        x: bx,
+        y: G.ewLaneY,
+        or: 'h',
+        kind: 'bus',
+        label: 'BUS'
+      }];
+      const packets = [];
+      let banner;
+      if (t < 2) banner = {
+        text: 'A late transit bus approaches — the green is about to end',
+        tone: 'info'
+      };else if (t < 3.4) {
+        packets.push({
+          ...lerpPt({
+            x: bx,
+            y: G.ewLaneY
+          }, G.rsu, seg(t, 2, 3.4)),
+          label: 'SRM',
+          tone: TONE.cyan
+        });
+        banner = {
+          text: 'Bus sends an SRM requesting priority',
+          tone: 'info'
+        };
+      } else if (t < 4.6) {
+        packets.push({
+          ...lerpPt(G.rsu, G.tc, seg(t, 3.4, 4.6)),
+          label: 'SRM',
+          tone: TONE.cyan
+        });
+        banner = {
+          text: 'RSU relays the request → controller extends the green',
+          tone: 'info'
+        };
+      } else if (t < 5.8) {
+        packets.push({
+          ...lerpPt(G.tc, {
+            x: bx,
+            y: G.ewLaneY
+          }, seg(t, 4.6, 5.8)),
+          label: 'SSM ✔',
+          tone: TONE.green
+        });
+        banner = {
+          text: 'TC confirms via SSM · green held for the bus',
+          tone: 'ok'
+        };
+      } else banner = {
+        text: 'Bus clears on an extended green — schedule kept',
+        tone: 'ok'
+      };
+      return {
+        layout: 'cross',
+        infra: 'signals',
+        ew: 'green',
+        ns: 'red',
+        cars,
+        packets,
+        banner,
+        waves: t >= 2 && t < 5.8
+      };
+    }
+  }, {
+    id: 'freight',
+    label: 'Freight · priority',
+    tagline: 'SRM → green held for the truck',
+    duration: 10,
+    why: 'A heavy truck is costly and slow to stop and restart. With an authorized freight role it sends an SRM; the controller extends the green (priority, not preemption) so the loaded truck clears without stopping — cutting fuel burn, emissions and brake wear.',
+    messages: ['SRM', 'SSM', 'SPaT'],
+    frame(t) {
+      const tx = lerp(-40, 1000, seg(t, 0, 10));
+      const cars = [{
+        id: 'frt',
+        x: tx,
+        y: G.ewLaneY,
+        or: 'h',
+        kind: 'truck',
+        label: 'FREIGHT'
+      }];
+      const packets = [];
+      let banner;
+      if (t < 2) banner = {
+        text: 'A loaded truck approaches — the green is about to end',
+        tone: 'info'
+      };else if (t < 3.4) {
+        packets.push({
+          ...lerpPt({
+            x: tx,
+            y: G.ewLaneY
+          }, G.rsu, seg(t, 2, 3.4)),
+          label: 'SRM',
+          tone: TONE.cyan
+        });
+        banner = {
+          text: 'Truck sends an SRM requesting freight priority',
+          tone: 'info'
+        };
+      } else if (t < 4.6) {
+        packets.push({
+          ...lerpPt(G.rsu, G.tc, seg(t, 3.4, 4.6)),
+          label: 'SRM',
+          tone: TONE.cyan
+        });
+        banner = {
+          text: 'RSU relays it → controller extends the green',
+          tone: 'info'
+        };
+      } else if (t < 5.8) {
+        packets.push({
+          ...lerpPt(G.tc, {
+            x: tx,
+            y: G.ewLaneY
+          }, seg(t, 4.6, 5.8)),
+          label: 'SSM ✔',
+          tone: TONE.green
+        });
+        banner = {
+          text: 'TC confirms via SSM · green held for the truck',
+          tone: 'ok'
+        };
+      } else banner = {
+        text: 'Truck clears without stopping — fuel, emissions & brakes saved',
+        tone: 'ok'
+      };
+      return {
+        layout: 'cross',
+        infra: 'signals',
+        ew: 'green',
+        ns: 'red',
+        cars,
+        packets,
+        banner,
+        waves: t >= 2 && t < 5.8
+      };
+    }
+  }]
 }, {
   id: 'rlvw',
   category: 'V2I',
@@ -4187,206 +4341,198 @@ const SCENARIOS = [{
   }
 }, /* ---------------- V2N — Vehicle-to-Network ---------------- */
 {
-  id: 'rszw',
+  // Same delivery path (TMC → cellular TIM → upstream vehicle), three hazards.
+  // Toggle to see the identical network mechanism carry each advisory.
+  id: 'hazard',
   category: 'V2N',
-  icon: '🚧',
-  title: 'Work-Zone Speed Warning',
-  tagline: 'TIM pushed over the cellular network',
-  duration: 8,
-  why: 'A work zone out of sight is registered in the Traffic Management Center. It pushes a TIM (Traveler Information Message) over the cellular network to approaching vehicles, which slow to the advised speed before reaching the workers.',
-  messages: ['TIM'],
-  frame(t) {
-    const ex = t < 3.5 ? lerp(-40, 330, seg(t, 0, 3.5)) : t < 5.5 ? lerp(330, 470, easeOut(seg(t, 3.5, 5.5))) : lerp(470, 900, seg(t, 5.5, 8));
-    const cars = [{
-      id: 'ego',
-      x: ex,
-      y: G.ewLaneY,
-      or: 'h',
-      kind: 'car',
-      label: 'EGO',
-      alert: t >= 3.4 && t < 5.5
-    }];
-    const packets = [];
-    let banner;
-    if (t < 1.5) banner = {
-      text: 'A work zone lies ahead, still out of sight',
-      tone: 'info'
-    };else if (t < 3.2) {
-      packets.push({
-        ...lerpPt({
-          x: G.tower.x,
-          y: G.tower.y
-        }, {
-          x: ex,
-          y: G.ewLaneY
-        }, seg(t, 1.5, 3.2)),
-        label: 'TIM',
-        tone: TONE.violet
-      });
-      banner = {
-        text: 'Traffic Mgmt Center pushes a TIM over the cellular network',
+  icon: '📡',
+  title: 'Network Hazard Warning (TIM)',
+  tagline: 'A TMC pushes a downstream-hazard TIM',
+  duration: 9,
+  variants: [{
+    id: 'workzone',
+    label: 'Work zone',
+    tagline: 'Reduce speed through the zone',
+    duration: 8,
+    why: 'A work zone out of sight is registered in the Traffic Management Center. It pushes a TIM (Traveler Information Message) over the cellular network to approaching vehicles, which slow to the advised speed before reaching the workers.',
+    messages: ['TIM'],
+    frame(t) {
+      const ex = t < 3.5 ? lerp(-40, 330, seg(t, 0, 3.5)) : t < 5.5 ? lerp(330, 470, easeOut(seg(t, 3.5, 5.5))) : lerp(470, 900, seg(t, 5.5, 8));
+      const cars = [{
+        id: 'ego',
+        x: ex,
+        y: G.ewLaneY,
+        or: 'h',
+        kind: 'car',
+        label: 'EGO',
+        alert: t >= 3.4 && t < 5.5
+      }];
+      const packets = [];
+      let banner;
+      if (t < 1.5) banner = {
+        text: 'A work zone lies ahead, still out of sight',
         tone: 'info'
-      };
-    } else if (t < 5.5) banner = {
-      text: 'Advisory: reduce to 45 km/h through the zone',
-      tone: 'warn',
-      sub: 'work zone in ~300 m'
-    };else banner = {
-      text: 'Slowed safely before the workers',
-      tone: 'ok'
-    };
-    return {
-      layout: 'straightH',
-      infra: 'tower',
-      cars,
-      packets,
-      hazard: {
-        x: 662,
-        kind: 'workzone',
-        label: 'WORK'
-      },
-      banner,
-      waves: t >= 1.5 && t < 3.2
-    };
-  }
-}, {
-  id: 'weather',
-  category: 'V2N',
-  icon: '❄️',
-  title: 'Road-Weather Hazard',
-  tagline: 'Black-ice alert from the network',
-  duration: 8,
-  why: 'Connected vehicles and sensors report black ice; the network aggregates it and delivers a road-weather TIM to vehicles upstream, which reduce speed before hitting the slippery patch.',
-  messages: ['TIM'],
-  frame(t) {
-    const ex = t < 3.5 ? lerp(-40, 320, seg(t, 0, 3.5)) : t < 5.5 ? lerp(320, 470, easeOut(seg(t, 3.5, 5.5))) : lerp(470, 900, seg(t, 5.5, 8));
-    const cars = [{
-      id: 'ego',
-      x: ex,
-      y: G.ewLaneY,
-      or: 'h',
-      kind: 'car',
-      label: 'EGO',
-      alert: t >= 3.4 && t < 5.5
-    }];
-    const packets = [];
-    let banner;
-    if (t < 1.5) banner = {
-      text: 'Black ice reported ahead by connected vehicles',
-      tone: 'info'
-    };else if (t < 3.2) {
-      packets.push({
-        ...lerpPt({
-          x: G.tower.x,
-          y: G.tower.y
-        }, {
-          x: ex,
-          y: G.ewLaneY
-        }, seg(t, 1.5, 3.2)),
-        label: 'TIM',
-        tone: TONE.violet
-      });
-      banner = {
-        text: 'Network delivers a road-weather TIM',
-        tone: 'info'
-      };
-    } else if (t < 5.5) banner = {
-      text: '⚠ REDUCE SPEED — slippery road ahead',
-      tone: 'warn'
-    };else banner = {
-      text: 'Driver slowed before the hazard',
-      tone: 'ok'
-    };
-    return {
-      layout: 'straightH',
-      infra: 'tower',
-      cars,
-      packets,
-      hazard: {
-        x: 662,
-        kind: 'ice',
-        label: '❄ ICE'
-      },
-      banner,
-      waves: t >= 1.5 && t < 3.2
-    };
-  }
-}, /* ---------------- more V2I ---------------- */
-{
-  id: 'tsp',
-  category: 'V2I',
-  icon: '🚌',
-  title: 'Transit Signal Priority',
-  tagline: 'Late bus earns a green extension',
-  duration: 10,
-  why: 'A behind-schedule bus sends an SRM requesting priority. Unlike full emergency preemption, the controller simply EXTENDS the current green (or trims the red) so the bus clears without stopping — improving on-time performance without disrupting the whole cycle.',
-  messages: ['SRM', 'SSM', 'SPaT'],
-  frame(t) {
-    const bx = lerp(-40, 980, seg(t, 0, 10));
-    const cars = [{
-      id: 'bus',
-      x: bx,
-      y: G.ewLaneY,
-      or: 'h',
-      kind: 'bus',
-      label: 'BUS'
-    }];
-    const packets = [];
-    let banner;
-    if (t < 2) banner = {
-      text: 'A late transit bus approaches — the green is about to end',
-      tone: 'info'
-    };else if (t < 3.4) {
-      packets.push({
-        ...lerpPt({
-          x: bx,
-          y: G.ewLaneY
-        }, G.rsu, seg(t, 2, 3.4)),
-        label: 'SRM',
-        tone: TONE.cyan
-      });
-      banner = {
-        text: 'Bus sends an SRM requesting priority',
-        tone: 'info'
-      };
-    } else if (t < 4.6) {
-      packets.push({
-        ...lerpPt(G.rsu, G.tc, seg(t, 3.4, 4.6)),
-        label: 'SRM',
-        tone: TONE.cyan
-      });
-      banner = {
-        text: 'RSU relays the request → controller extends the green',
-        tone: 'info'
-      };
-    } else if (t < 5.8) {
-      packets.push({
-        ...lerpPt(G.tc, {
-          x: bx,
-          y: G.ewLaneY
-        }, seg(t, 4.6, 5.8)),
-        label: 'SSM ✔',
-        tone: TONE.green
-      });
-      banner = {
-        text: 'TC confirms via SSM · green held for the bus',
+      };else if (t < 3.2) {
+        packets.push({
+          ...lerpPt({
+            x: G.tower.x,
+            y: G.tower.y
+          }, {
+            x: ex,
+            y: G.ewLaneY
+          }, seg(t, 1.5, 3.2)),
+          label: 'TIM',
+          tone: TONE.violet
+        });
+        banner = {
+          text: 'Traffic Mgmt Center pushes a TIM over the cellular network',
+          tone: 'info'
+        };
+      } else if (t < 5.5) banner = {
+        text: 'Advisory: reduce to 45 km/h through the zone',
+        tone: 'warn',
+        sub: 'work zone in ~300 m'
+      };else banner = {
+        text: 'Slowed safely before the workers',
         tone: 'ok'
       };
-    } else banner = {
-      text: 'Bus clears on an extended green — schedule kept',
-      tone: 'ok'
-    };
-    return {
-      layout: 'cross',
-      infra: 'signals',
-      ew: 'green',
-      ns: 'red',
-      cars,
-      packets,
-      banner,
-      waves: t >= 2 && t < 5.8
-    };
-  }
+      return {
+        layout: 'straightH',
+        infra: 'tower',
+        cars,
+        packets,
+        hazard: {
+          x: 662,
+          kind: 'workzone',
+          label: 'WORK'
+        },
+        banner,
+        waves: t >= 1.5 && t < 3.2
+      };
+    }
+  }, {
+    id: 'ice',
+    label: 'Black ice',
+    tagline: 'Slippery road ahead',
+    duration: 8,
+    why: 'Connected vehicles and sensors report black ice; the network aggregates it and delivers a road-weather TIM to vehicles upstream, which reduce speed before hitting the slippery patch.',
+    messages: ['TIM'],
+    frame(t) {
+      const ex = t < 3.5 ? lerp(-40, 320, seg(t, 0, 3.5)) : t < 5.5 ? lerp(320, 470, easeOut(seg(t, 3.5, 5.5))) : lerp(470, 900, seg(t, 5.5, 8));
+      const cars = [{
+        id: 'ego',
+        x: ex,
+        y: G.ewLaneY,
+        or: 'h',
+        kind: 'car',
+        label: 'EGO',
+        alert: t >= 3.4 && t < 5.5
+      }];
+      const packets = [];
+      let banner;
+      if (t < 1.5) banner = {
+        text: 'Black ice reported ahead by connected vehicles',
+        tone: 'info'
+      };else if (t < 3.2) {
+        packets.push({
+          ...lerpPt({
+            x: G.tower.x,
+            y: G.tower.y
+          }, {
+            x: ex,
+            y: G.ewLaneY
+          }, seg(t, 1.5, 3.2)),
+          label: 'TIM',
+          tone: TONE.violet
+        });
+        banner = {
+          text: 'Network delivers a road-weather TIM',
+          tone: 'info'
+        };
+      } else if (t < 5.5) banner = {
+        text: '⚠ REDUCE SPEED — slippery road ahead',
+        tone: 'warn'
+      };else banner = {
+        text: 'Driver slowed before the hazard',
+        tone: 'ok'
+      };
+      return {
+        layout: 'straightH',
+        infra: 'tower',
+        cars,
+        packets,
+        hazard: {
+          x: 662,
+          kind: 'ice',
+          label: '❄ ICE'
+        },
+        banner,
+        waves: t >= 1.5 && t < 3.2
+      };
+    }
+  }, {
+    id: 'stalled',
+    label: 'Stalled vehicle',
+    tagline: 'Lane blocked — move over',
+    duration: 9,
+    why: 'A stalled vehicle or crash downstream is reported by connected cars and cameras. The network pushes an incident TIM upstream so drivers slow and change lanes early — smoothing traffic and preventing secondary crashes.',
+    messages: ['TIM'],
+    frame(t) {
+      const ex = t < 3.5 ? lerp(-40, 300, seg(t, 0, 3.5)) : lerp(300, 900, seg(t, 3.5, 9));
+      const ey = t < 4 ? 292 : t < 5.5 ? lerp(292, 250, seg(t, 4, 5.5)) : 250;
+      const cars = [{
+        id: 'stall',
+        x: 672,
+        y: 292,
+        or: 'h',
+        kind: 'car',
+        alert: true
+      }, {
+        id: 'ego',
+        x: ex,
+        y: ey,
+        or: 'h',
+        kind: 'car',
+        label: 'EGO'
+      }];
+      const packets = [];
+      let banner;
+      if (t < 1.5) banner = {
+        text: 'A vehicle is stalled downstream, out of sight',
+        tone: 'info'
+      };else if (t < 3.2) {
+        packets.push({
+          ...lerpPt({
+            x: G.tower.x,
+            y: G.tower.y
+          }, {
+            x: ex,
+            y: 292
+          }, seg(t, 1.5, 3.2)),
+          label: 'TIM',
+          tone: TONE.violet
+        });
+        banner = {
+          text: 'Network pushes an incident TIM upstream',
+          tone: 'info'
+        };
+      } else if (t < 5.5) banner = {
+        text: 'Advisory: lane blocked ahead — move over now',
+        tone: 'warn'
+      };else banner = {
+        text: 'Passed the incident safely in the open lane',
+        tone: 'ok'
+      };
+      return {
+        layout: 'straightH',
+        infra: 'tower',
+        cars,
+        packets,
+        banner,
+        waves: t >= 1.5 && t < 3.2
+      };
+    }
+  }]
 }, /* ---------------- more V2V ---------------- */
 {
   id: 'platoon',
@@ -4684,70 +4830,6 @@ const SCENARIOS = [{
       waves: t >= 1.5 && t < 3.2
     };
   }
-}, {
-  id: 'incident',
-  category: 'V2N',
-  icon: '🆘',
-  title: 'Stalled-Vehicle / Incident Ahead',
-  tagline: 'Network relays a downstream hazard',
-  duration: 9,
-  why: 'A stalled vehicle or crash downstream is reported by connected cars and cameras. The network pushes an incident TIM upstream so drivers slow and change lanes early — smoothing traffic and preventing secondary crashes.',
-  messages: ['TIM'],
-  frame(t) {
-    const ex = t < 3.5 ? lerp(-40, 300, seg(t, 0, 3.5)) : lerp(300, 900, seg(t, 3.5, 9));
-    const ey = t < 4 ? 292 : t < 5.5 ? lerp(292, 250, seg(t, 4, 5.5)) : 250;
-    const cars = [{
-      id: 'stall',
-      x: 672,
-      y: 292,
-      or: 'h',
-      kind: 'car',
-      alert: true
-    }, {
-      id: 'ego',
-      x: ex,
-      y: ey,
-      or: 'h',
-      kind: 'car',
-      label: 'EGO'
-    }];
-    const packets = [];
-    let banner;
-    if (t < 1.5) banner = {
-      text: 'A vehicle is stalled downstream, out of sight',
-      tone: 'info'
-    };else if (t < 3.2) {
-      packets.push({
-        ...lerpPt({
-          x: G.tower.x,
-          y: G.tower.y
-        }, {
-          x: ex,
-          y: 292
-        }, seg(t, 1.5, 3.2)),
-        label: 'TIM',
-        tone: TONE.violet
-      });
-      banner = {
-        text: 'Network pushes an incident TIM upstream',
-        tone: 'info'
-      };
-    } else if (t < 5.5) banner = {
-      text: 'Advisory: lane blocked ahead — move over now',
-      tone: 'warn'
-    };else banner = {
-      text: 'Passed the incident safely in the open lane',
-      tone: 'ok'
-    };
-    return {
-      layout: 'straightH',
-      infra: 'tower',
-      cars,
-      packets,
-      banner,
-      waves: t >= 1.5 && t < 3.2
-    };
-  }
 }, /* ---------------- more V2P ---------------- */
 {
   id: 'dartout',
@@ -5022,81 +5104,6 @@ const SCENARIOS = [{
       },
       banner,
       waves: t >= 1.5 && t < 3.2
-    };
-  }
-}, {
-  id: 'fsp',
-  category: 'V2I',
-  icon: '🚚',
-  title: 'Freight Signal Priority',
-  tagline: 'Green held for a loaded truck',
-  duration: 10,
-  why: 'A heavy truck is costly and slow to stop and restart. With an authorized freight role it sends an SRM; the controller extends the green (priority, not preemption) so the loaded truck clears without stopping — cutting fuel burn, emissions and brake wear.',
-  messages: ['SRM', 'SSM', 'SPaT'],
-  frame(t) {
-    const tx = lerp(-40, 1000, seg(t, 0, 10));
-    const cars = [{
-      id: 'frt',
-      x: tx,
-      y: G.ewLaneY,
-      or: 'h',
-      kind: 'truck',
-      label: 'FREIGHT'
-    }];
-    const packets = [];
-    let banner;
-    if (t < 2) banner = {
-      text: 'A loaded truck approaches — the green is about to end',
-      tone: 'info'
-    };else if (t < 3.4) {
-      packets.push({
-        ...lerpPt({
-          x: tx,
-          y: G.ewLaneY
-        }, G.rsu, seg(t, 2, 3.4)),
-        label: 'SRM',
-        tone: TONE.cyan
-      });
-      banner = {
-        text: 'Truck sends an SRM requesting freight priority',
-        tone: 'info'
-      };
-    } else if (t < 4.6) {
-      packets.push({
-        ...lerpPt(G.rsu, G.tc, seg(t, 3.4, 4.6)),
-        label: 'SRM',
-        tone: TONE.cyan
-      });
-      banner = {
-        text: 'RSU relays it → controller extends the green',
-        tone: 'info'
-      };
-    } else if (t < 5.8) {
-      packets.push({
-        ...lerpPt(G.tc, {
-          x: tx,
-          y: G.ewLaneY
-        }, seg(t, 4.6, 5.8)),
-        label: 'SSM ✔',
-        tone: TONE.green
-      });
-      banner = {
-        text: 'TC confirms via SSM · green held for the truck',
-        tone: 'ok'
-      };
-    } else banner = {
-      text: 'Truck clears without stopping — fuel, emissions & brakes saved',
-      tone: 'ok'
-    };
-    return {
-      layout: 'cross',
-      infra: 'signals',
-      ew: 'green',
-      ns: 'red',
-      cars,
-      packets,
-      banner,
-      waves: t >= 2 && t < 5.8
     };
   }
 }, {
