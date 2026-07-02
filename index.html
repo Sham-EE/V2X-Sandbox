@@ -4083,6 +4083,10 @@ function UseCasesTab() {
 /* =====================================================================
    5. GLOSSARY
 ===================================================================== */
+// `format` (optional): the real-world wire/message layout, shown via a toggle.
+// Byte layouts for IETF/IEEE protocols are public & accurate; SAE J2735 and
+// NTCIP 1202 object text are copyrighted (paywalled), so those structures are
+// accurate *representative* sketches from public documentation, labeled as such.
 const GLOSSARY = [{
   group: 'Devices',
   icon: '🛰️',
@@ -4090,67 +4094,279 @@ const GLOSSARY = [{
     term: 'Traffic Controller (TC)',
     def: 'The roadside computer cabinet that physically controls the traffic signal lights and timing phases based on loops, cameras, or fixed pre-timed schedules.'
   }, {
+    term: 'Advanced Traffic Controller (ATC)',
+    def: 'A modern Linux-based controller (per the ATC 5201 standard) that can natively generate and sign SAE J2735 SPaT/MAP, unlike legacy NEMA TS2 / Model 170 controllers that only speak NTCIP 1202 and need the RSU to convert.'
+  }, {
     term: 'Roadside Unit (RSU)',
     def: 'An ITS device mounted on roadside infrastructure (like a signal pole) that facilitates wireless communication between the traffic controller and nearby vehicles or pedestrians.'
   }, {
     term: 'On-Board Unit (OBU)',
     def: "A hardware transceiver installed inside a vehicle that receives over-the-air messages from the RSU and broadcasts the vehicle's own real-time state."
   }, {
+    term: 'ADAS',
+    def: 'Advanced Driver-Assistance System — the in-vehicle brain that fuses incoming V2X messages with onboard sensors (radar/camera/lidar) to warn the driver or actuate braking and steering.'
+  }, {
     term: 'Vehicle',
     def: 'The final node containing the central ADAS/CPU processing brain that pulls data from the OBU, coordinates sensor fusion with internal vehicle metrics, and acts on safety logic.'
+  }, {
+    term: 'VRU (Vulnerable Road User)',
+    def: 'A pedestrian, cyclist, or road worker — a road user with no protective vehicle shell — whose position and presence are shared over V2X via a PSM.'
   }]
 }, {
   group: 'Standards › Communication',
   icon: '📶',
   items: [{
     term: 'Ethernet (IEEE 802.3)',
-    def: 'The physical, high-speed wired connection typically used within the intersection cabinet to link the Traffic Controller to the RSU.'
+    def: 'The physical, high-speed wired connection typically used within the intersection cabinet to link the Traffic Controller to the RSU.',
+    format: `Ethernet II frame (IEEE 802.3)
++----------+----------+------+-------------------+-----+
+| Dst MAC  | Src MAC  | Type | Payload 46–1500 B | FCS |
+|  6 bytes |  6 bytes | 2 B  |  (e.g. IP packet) | 4 B |
++----------+----------+------+-------------------+-----+
+Preamble (7B) + SFD (1B) precede the frame.
+EtherType: 0x0800 = IPv4 · 0x86DD = IPv6 · 0x0806 = ARP`
   }, {
     term: 'TCP/IP',
-    def: 'The standard internet protocol suite providing reliable, connection-oriented data transmission over wired infrastructure networks.'
+    def: 'The standard internet protocol suite providing reliable, connection-oriented data transmission over wired infrastructure networks.',
+    format: `IPv4 header (20 bytes) then TCP/UDP payload — RFC 791
+ 0      4       8             16                      31
++------+-------+--------------+------------------------+
+|Ver=4 | IHL   | DSCP / ECN   | Total Length           |
++------+-------+--------------+-----+------------------+
+| Identification             |Flags| Fragment Offset  |
++--------------+-------------+-----+-------------------+
+| TTL          | Protocol    | Header Checksum         |
+|              | 6=TCP 17=UDP|                         |
++--------------+-------------+-------------------------+
+| Source IPv4 Address (32 bits)                        |
+| Destination IPv4 Address (32 bits)                   |
++------------------------------------------------------+`
   }, {
     term: 'UDP',
-    def: 'A lightweight, connectionless transport protocol often favored in time-critical V2X operations where speed is prioritized over packet-delivery verification.'
+    def: 'A lightweight, connectionless transport protocol often favored in time-critical V2X operations where speed is prioritized over packet-delivery verification.',
+    format: `UDP datagram header (8 bytes) — RFC 768
+ 0                16               31
++-----------------+----------------+
+| Source Port     | Dest Port      |
++-----------------+----------------+
+| Length          | Checksum       |
++-----------------+----------------+
+| Data … (e.g. WSMP / SAE J2735)   |
++----------------------------------+`
   }, {
     term: 'DSRC (IEEE 802.11p)',
-    def: 'Dedicated Short-Range Communications; an older Wi-Fi-derived wireless standard operating in the 5.9 GHz spectrum for localized vehicular communication.'
+    def: 'Dedicated Short-Range Communications; an older Wi-Fi-derived wireless standard operating in the 5.9 GHz spectrum for localized vehicular communication.',
+    format: `DSRC / WAVE stack (5.9 GHz, 10 MHz channels)
+IEEE 802.11p MAC (OCB mode — no association)
+  └─ LLC / SNAP
+      └─ WSMP  (IEEE 1609.3 — WAVE Short Message)
+           • Version • PSID (provider service id)
+           • Channel • DataRate • TxPower
+           • WSM Length
+           └─ IEEE 1609.2 secured payload
+                 └─ SAE J2735 MessageFrame`
   }, {
     term: 'C-V2X (3GPP)',
-    def: 'Cellular Vehicle-to-Everything; a modern cellular-based communication standard utilizing direct PC5 sidelink communication to allow low-latency V2X transmissions without requiring a cellular network tower.'
+    def: 'Cellular Vehicle-to-Everything; a modern cellular-based communication standard utilizing direct PC5 sidelink communication to allow low-latency V2X transmissions without requiring a cellular network tower.',
+    format: `C-V2X PC5 sidelink (3GPP Rel-14+)
+PHY: SC-FDMA @ 5.9 GHz, sub-channelized
+  └─ MAC  (Mode 4 autonomous / Mode 3 scheduled)
+      └─ RLC / PDCP
+          └─ IEEE 1609.2 secured payload
+                └─ SAE J2735 MessageFrame
+Direct device-to-device — no cellular tower required.`
   }]
 }, {
   group: 'Standards › Messages',
   icon: '📨',
   items: [{
     term: 'NTCIP 1202',
-    def: 'The National Transportation Communications for ITS Protocol standard regulating how traffic signal controllers store and transmit signal phase and timing data over wired networks.'
+    def: 'The National Transportation Communications for ITS Protocol standard regulating how traffic signal controllers store and transmit signal phase and timing data over wired networks.',
+    format: `NTCIP 1202 — signal-controller objects (SNMP MIB)
+Accessed via SNMP GET/SET on OIDs (BER-encoded).
+Enterprise root: 1.3.6.1.4.1.1206  (NEMA / AASHTO / ITE)
+Representative phase / SPaT objects:
+  phaseNumber              …1206.4.2.1.1.2.1.1
+  phaseStatusGroupGreens   …1206.4.2.1.1.4.x
+  phaseStatusGroupYellows  …1206.4.2.1.1.4.x
+  phaseStatusGroupReds     …1206.4.2.1.1.4.x
+  phaseMinimumGreen · phaseYellowChange · phaseRedClear
+v03 adds SPaT/MAP support for connected vehicles.
+— Representative; authoritative text © NTCIP (paywalled).`
   }, {
     term: 'SAE J2735',
-    def: 'The foundational message set dictionary standard specifying the data payload formats used for over-the-air V2X safety applications.'
+    def: 'The foundational message set dictionary standard specifying the data payload formats used for over-the-air V2X safety applications.',
+    format: `SAE J2735 MessageFrame (ASN.1, UPER-encoded over the air)
+MessageFrame ::= SEQUENCE {
+  messageId  DSRCmsgID,   -- 18=MAP 19=SPaT 20=BSM
+                          -- 29=SRM 30=SSM 31=TIM 32=PSM
+  value      ANY DEFINED BY messageId
+}
+Encoding: UPER (Unaligned Packed Encoding Rules).
+— Representative sketch; the authoritative ASN.1 module
+  is © SAE International (J2735), paywalled.`
   }, {
     term: 'BSM (Basic Safety Message)',
+    child: 'SAE J2735',
     def: 'Broadcasted continuously by vehicles containing high-frequency kinematic state data (position, speed, heading, braking state).',
-    child: 'SAE J2735'
+    format: `BasicSafetyMessage — representative ASN.1
+BasicSafetyMessage ::= SEQUENCE {
+  coreData  BSMcoreData,
+  partII    SEQUENCE OF PartIIcontent OPTIONAL
+}
+BSMcoreData ::= SEQUENCE {
+  msgCnt, id (4-byte TemporaryID — rotates for privacy),
+  secMark (ms), lat, long, elev, accuracy,
+  transmission, speed (0.02 m/s), heading (0.0125°),
+  angle, accelSet (long/lat/vert/yaw),
+  brakes (BrakeSystemStatus), size (VehicleSize)
+}
+Broadcast at ~10 Hz.  — © SAE J2735, paywalled.`
   }, {
     term: 'SPaT (Signal Phase and Timing)',
+    child: 'SAE J2735',
     def: 'Broadcasted by RSUs to communicate the current color status of every intersection signal group and the countdown time remaining until the next phase change.',
-    child: 'SAE J2735'
+    format: `SPAT — representative ASN.1
+SPAT ::= SEQUENCE {
+  timeStamp     MinuteOfTheYear OPTIONAL,
+  intersections IntersectionStateList     -- 1..32
+}
+IntersectionState ::= SEQUENCE {
+  id, revision, status, states MovementList
+}
+MovementState ::= SEQUENCE {
+  signalGroup  SignalGroupID,             -- ties to MAP lanes
+  state-time-speed MovementEventList {
+    eventState (stop-and-remain / protected-movement …),
+    timing { minEndTime, maxEndTime }     -- 1/10 s of the hour
+  }
+}
+— © SAE J2735, paywalled.`
   }, {
     term: 'MAP (Intersection Geometry)',
+    child: 'SAE J2735',
     def: 'Broadcasted by RSUs to provide a centimeter-accurate digital layout of lane centerlines, lane attributes, allowed maneuvers, and stop bar boundaries.',
-    child: 'SAE J2735'
+    format: `MapData — representative ASN.1
+MapData ::= SEQUENCE {
+  msgIssueRevision  MsgCount,
+  intersections     IntersectionGeometryList OPTIONAL
+}
+IntersectionGeometry ::= SEQUENCE {
+  id        IntersectionReferenceID,
+  refPoint  Position3D,           -- anchor lat/long/elev
+  laneWidth LaneWidth OPTIONAL,
+  laneSet   LaneList              -- per lane: id, attributes,
+                                  -- connections, node centerline
+}
+Static geometry — usually stored & broadcast by the RSU.
+— © SAE J2735, paywalled.`
   }, {
     term: 'PSM (Personal Safety Message)',
+    child: 'SAE J2735',
     def: 'Broadcasted by or for Vulnerable Road Users (VRUs) like pedestrians, cyclists, or road workers to declare their position and presence to passing vehicles.',
-    child: 'SAE J2735'
+    format: `PersonalSafetyMessage — representative ASN.1
+PersonalSafetyMessage ::= SEQUENCE {
+  basicType  PersonalDeviceUserType,  -- pedestrian/cyclist/…
+  secMark    DSecond,
+  id         TemporaryID,
+  position   Position3D,
+  accuracy   PositionalAccuracy,
+  speed      Speed,
+  heading    Heading,
+  …          (path history, activity) OPTIONAL
+}
+— © SAE J2735, paywalled.`
   }, {
     term: 'SRM / SSM',
+    child: 'SAE J2735',
     def: 'Signal Request Message (a vehicle asking for priority/preemption) and Signal Status Message (the controller’s response confirming the request state).',
-    child: 'SAE J2735'
+    format: `SignalRequestMessage / SignalStatusMessage — representative
+SignalRequestMessage ::= SEQUENCE {
+  second     DSecond,
+  requests   SignalRequestList OPTIONAL,  -- desired group + ETA
+  requestor  RequestorDescription         -- role: fire, police,
+                                           -- ambulance, transit …
+}
+SignalStatusMessage ::= SEQUENCE {
+  status  SignalStatusList   -- per request: requested,
+                             -- processing, granted, rejected
+}
+— © SAE J2735, paywalled.`
   }, {
     term: 'TIM (Traveler Information Message)',
+    child: 'SAE J2735',
     def: 'Advisory content — work zones, reduced-speed zones, road-weather, and incident/hazard alerts — delivered to vehicles by roadside units or over the cellular network from a Traffic Management Center.',
-    child: 'SAE J2735'
+    format: `TravelerInformation — representative ASN.1
+TravelerInformation ::= SEQUENCE {
+  packetID   UniqueMSGID OPTIONAL,
+  dataFrames TravelerDataFrameList {       -- 1..8
+    startYear / startTime, duration,
+    regions  (applicable geometry / lanes),
+    content  (ITIS codes | text | speed limit)
+  }
+}
+Used for work-zone, speed, weather & incident alerts.
+— © SAE J2735, paywalled.`
+  }]
+}, {
+  group: 'Security',
+  icon: '🔒',
+  items: [{
+    term: 'IEEE 1609.2',
+    def: 'The V2X message-security standard. Every over-the-air frame is signed (ECDSA) with a certificate so receivers can verify authenticity and integrity — and reject spoofed or tampered messages.',
+    format: `IEEE 1609.2 secured data (ASN.1, COER-encoded)
+Ieee1609Dot2Data ::= SEQUENCE {
+  protocolVersion  Uint8 (3),
+  content          Ieee1609Dot2Content
+}
+Ieee1609Dot2Content ::= CHOICE {
+  signedData     SignedData,     -- typical for V2X safety msgs
+  encryptedData  EncryptedData, …
+}
+SignedData ::= SEQUENCE {
+  hashId    HashAlgorithm,        -- sha256
+  tbsData   ToBeSignedData,       -- payload + PSID + genTime
+  signer    SignerIdentifier,     -- certificate | digest
+  signature Signature             -- ECDSA (NISTp256 / brainpool)
+}
+Public structure (IEEE); certificates issued by the SCMS.`
+  }, {
+    term: 'SCMS',
+    def: 'Security Credential Management System — the public-key infrastructure that issues and revokes the short-lived pseudonym certificates V2X devices use to sign messages, providing trust while protecting driver privacy.'
+  }]
+}, {
+  group: 'Applications (V2X apps)',
+  icon: '🎬',
+  items: [{
+    term: 'GLOSA',
+    def: 'Green Light Optimal Speed Advisory — uses SPaT to advise the speed that lets a vehicle arrive on green, cutting stops, idling and fuel.'
+  }, {
+    term: 'RLVW',
+    def: 'Red-Light Violation Warning — the ADAS combines SPaT (time-to-red) and MAP (distance to the stop bar) to predict, and warn of, a red-light running.'
+  }, {
+    term: 'FCW',
+    def: 'Forward Collision Warning — a following vehicle is warned when a lead vehicle’s BSM shows hard braking or a rapidly closing gap.'
+  }, {
+    term: 'EEBL',
+    def: 'Emergency Electronic Brake Light — a vehicle’s hard braking is broadcast via BSM so vehicles behind (even beyond line of sight) are warned.'
+  }, {
+    term: 'IMA',
+    def: 'Intersection Movement Assist — crossing vehicles exchange BSMs to warn of a collision when the view of cross-traffic is blocked.'
+  }, {
+    term: 'DNPW',
+    def: 'Do Not Pass Warning — warns a driver against passing when an oncoming vehicle (revealed by its BSM) makes the maneuver unsafe.'
+  }, {
+    term: 'CACC / Platooning',
+    def: 'Cooperative Adaptive Cruise Control — vehicles share BSMs to hold tight, synchronized following gaps and brake together far faster than human reaction.'
+  }, {
+    term: 'TSP',
+    def: 'Transit Signal Priority — a behind-schedule bus sends an SRM to extend the green (a softer form of preemption) and stay on schedule.'
+  }, {
+    term: 'RSZW',
+    def: 'Reduced-Speed / Work-Zone Warning — a TIM (often delivered over the cellular network) advises a lower speed ahead of a work zone.'
+  }, {
+    term: 'HRI Warning',
+    def: 'Highway-Rail Intersection Warning — an RSU at a level crossing warns approaching connected vehicles of an oncoming train.'
   }]
 }, {
   group: 'Architecture',
@@ -4170,6 +4386,10 @@ function GlossaryTab() {
   const [q, setQ] = useState('');
   const [openGroups, setOpenGroups] = useState(() => GLOSSARY.map(g => g.group));
   const [selected, setSelected] = useState(GLOSSARY[0].items[0]);
+  const [view, setView] = useState('def'); // 'def' | 'format'
+  useEffect(() => {
+    setView('def');
+  }, [selected]); // reset toggle when the term changes
   const ql = q.trim().toLowerCase();
   const match = it => !ql || it.term.toLowerCase().includes(ql) || it.def.toLowerCase().includes(ql);
   const toggleGroup = g => setOpenGroups(prev => prev.includes(g) ? prev.filter(x => x !== g) : [...prev, g]);
@@ -4221,23 +4441,29 @@ function GlossaryTab() {
     className: "text-[11px] uppercase tracking-widest text-neon-cyan mb-2"
   }, selected.child ? `${selected.child} › ${selected.term}` : 'Definition'), /*#__PURE__*/React.createElement("h1", {
     className: "text-2xl font-bold text-slate-100"
-  }, selected.term), /*#__PURE__*/React.createElement("p", {
+  }, selected.term), selected.format && /*#__PURE__*/React.createElement("div", {
+    className: "mt-4 inline-flex rounded-lg border border-zinc-700 bg-zinc-900/70 p-1"
+  }, [{
+    v: 'def',
+    l: 'Definition'
+  }, {
+    v: 'format',
+    l: 'Format'
+  }].map(o => /*#__PURE__*/React.createElement("button", {
+    key: o.v,
+    onClick: () => setView(o.v),
+    className: 'rounded-md px-3 py-1 text-[13px] font-medium transition ' + (view === o.v ? 'bg-neon-cyan text-zinc-950' : 'text-slate-300 hover:text-white')
+  }, o.l))), (!selected.format || view === 'def') && /*#__PURE__*/React.createElement("p", {
     className: "mt-4 text-[15px] leading-relaxed text-slate-300"
-  }, selected.def), /*#__PURE__*/React.createElement("div", {
-    className: "mt-8 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4"
+  }, selected.def), selected.format && view === 'format' && /*#__PURE__*/React.createElement("div", {
+    className: "mt-4"
   }, /*#__PURE__*/React.createElement("div", {
     className: "text-[11px] uppercase tracking-widest text-slate-500 mb-2"
-  }, "Where it lives in the pipeline"), /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center gap-2 text-sm text-slate-400 font-mono flex-wrap"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "rounded bg-zinc-800 px-2 py-1"
-  }, "TC"), "\u2192", /*#__PURE__*/React.createElement("span", {
-    className: "rounded bg-zinc-800 px-2 py-1"
-  }, "RSU"), "\u2192", /*#__PURE__*/React.createElement("span", {
-    className: "rounded bg-zinc-800 px-2 py-1"
-  }, "OBU"), "\u2192", /*#__PURE__*/React.createElement("span", {
-    className: "rounded bg-zinc-800 px-2 py-1"
-  }, "Vehicle"))))));
+  }, "Standard wire / message format"), /*#__PURE__*/React.createElement("pre", {
+    className: "rounded-xl border border-zinc-800 bg-black/60 p-4 font-mono text-[12px] leading-relaxed text-slate-200 overflow-auto whitespace-pre"
+  }, selected.format), /*#__PURE__*/React.createElement("p", {
+    className: "mt-2 text-[11px] text-slate-500"
+  }, "IETF/IEEE byte layouts are the real public formats. SAE J2735 & NTCIP 1202 structures are accurate representative sketches \u2014 their authoritative text is copyrighted/paywalled.")))));
 }
 
 /* =====================================================================
