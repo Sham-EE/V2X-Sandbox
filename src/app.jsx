@@ -2,16 +2,21 @@
    V2X Infrastructure Playground & Testing Tool
    ---------------------------------------------------------------------
    Source of truth. Edit this file, then run `node build.js` to regenerate
-   the self-contained index.html.
+   the self-contained (fully offline) index.html.  Tests: `npm test`.
 
-   Tabs:
-     1. World Builder  — creative drag-and-drop sandbox. Drag devices from
-        the palette, move them, wire them together (port → port), pick a
-        real-world model per device and read its spec sheet (can / can't do).
-     2. Use Cases      — scripted, animated V2X simulations (SRM emergency
-        preemption, Red-Light Violation Warning, V2X actuated detection,
-        GLOSA green-wave advisory).
-     3. Glossary       — hierarchical technical dictionary.
+   TABLE OF CONTENTS  (search for the marked "N." section headers)
+     1.  Device types + real-world model catalog (spec sheets)
+     1b. Connections, message model + linkStreams (packet flow logic)
+     2.  UI primitives (Segmented, JsonView)
+     3.  World Builder tab  (drag-drop sandbox · wiring · live simulation)
+     4.  Use Cases tab      (MiniScene + animated scenario timelines)
+     5.  Glossary tab       (definitions + real wire/message formats)
+     5b. Device Anatomy tab (cabinet cutaway you wire up + RSU internals)
+     5c. Test Your Knowledge (quiz)
+     6.  App shell + top navigation
+
+   Tabs the user sees: World Builder · Use Cases · Test Your Knowledge ·
+   Device Anatomy · Glossary.
 ===================================================================== */
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
 

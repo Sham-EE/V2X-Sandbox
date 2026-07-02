@@ -1,15 +1,17 @@
 {
   "name": "v2x_visualizer_lt",
   "version": "1.0.0",
-  "main": "index.js",
+  "description": "V2X Infrastructure Playground — a single-file, offline interactive tool for learning Vehicle-to-Everything (V2X) systems.",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "node build.js",
+    "test": "node tests/run.js"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": ["v2x", "its", "traffic", "sae-j2735", "education"],
   "license": "ISC",
-  "description": "",
   "devDependencies": {
-    "@babel/standalone": "^7.29.7"
+    "@babel/standalone": "^7.29.7",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwindcss": "^3.4.19"
   }
 }
