@@ -1125,24 +1125,50 @@ const SCENARIOS = [
 
   /* ---------------- V2P — Vehicle-to-Pedestrian ---------------- */
   {
-    id: 'pcw', category: 'V2P', icon: '🚶', title: 'Pedestrian Crossing Warning', tagline: 'PSM from a phone in the crosswalk',
+    id: 'pcw', category: 'V2P', icon: '🚶', title: 'Pedestrian Crossing Warning', tagline: 'Toggle who gets the warning',
     duration: 8,
-    why: 'A pedestrian steps into a mid-block crosswalk. Their smartphone / VRU device broadcasts a PSM. The approaching vehicle receives it and yields — even at night or around a visual obstruction.',
-    messages: ['PSM'],
-    frame(t) {
-      const cx = 500;
-      const ex = t < 3.4 ? lerp(-40, 300, seg(t, 0, 3.4)) : (t < 5.2 ? lerp(300, 420, easeOut(seg(t, 3.4, 5.2))) : 420);
-      const py = t < 1.5 ? 360 : lerp(360, 188, seg(t, 1.5, 7));
-      const warn = t >= 2.6 && t < 5.4;
-      const cars = [{ id: 'ego', x: ex, y: G.ewLaneY, or: 'h', kind: 'car', label: 'EGO', alert: warn }];
-      const ped = { x: cx, y: py, broadcasting: true };
-      const packets = []; let banner;
-      if (t < 1.5) banner = { text: 'Vehicle approaches a crosswalk', tone: 'info' };
-      else if (t < 2.6) { packets.push({ ...lerpPt({ x: cx, y: py }, { x: ex, y: G.ewLaneY }, seg(t, 1.5, 2.6)), label: 'PSM', tone: TONE.amber }); banner = { text: 'Pedestrian steps off the curb → device broadcasts a PSM', tone: 'warn' }; }
-      else if (t < 5.4) banner = { text: '⚠ PEDESTRIAN IN CROSSWALK — vehicle yields', tone: 'warn' };
-      else banner = { text: 'Pedestrian crosses safely', tone: 'ok' };
-      return { layout: 'straightH', infra: 'none', crosswalk: cx, cars, packets, ped, banner, waves: t >= 1.5 && t < 5.4 };
-    },
+    variants: [
+      {
+        id: 'veh', label: 'Vehicle is warned', tagline: 'PSM → the car yields',
+        why: 'A pedestrian steps into a mid-block crosswalk. Their smartphone / VRU device broadcasts a PSM. The approaching vehicle receives it and yields — even at night or around a visual obstruction.',
+        messages: ['PSM'],
+        frame(t) {
+          const cx = 500;
+          const ex = t < 3.4 ? lerp(-40, 300, seg(t, 0, 3.4)) : (t < 5.2 ? lerp(300, 420, easeOut(seg(t, 3.4, 5.2))) : 420);
+          const py = t < 1.5 ? 360 : lerp(360, 188, seg(t, 1.5, 7));
+          const warn = t >= 2.6 && t < 5.4;
+          const cars = [{ id: 'ego', x: ex, y: G.ewLaneY, or: 'h', kind: 'car', label: 'EGO', alert: warn }];
+          const ped = { x: cx, y: py, broadcasting: true };
+          const packets = []; let banner;
+          if (t < 1.5) banner = { text: 'A vehicle approaches a crosswalk', tone: 'info' };
+          else if (t < 2.6) { packets.push({ ...lerpPt({ x: cx, y: py }, { x: ex, y: G.ewLaneY }, seg(t, 1.5, 2.6)), label: 'PSM', tone: TONE.amber }); banner = { text: 'Pedestrian steps off the curb → their device broadcasts a PSM', tone: 'warn' }; }
+          else if (t < 5.4) banner = { text: '⚠ PEDESTRIAN IN CROSSWALK — the vehicle yields', tone: 'warn' };
+          else banner = { text: 'The vehicle stopped — pedestrian crosses safely', tone: 'ok' };
+          return { layout: 'straightH', infra: 'none', crosswalk: cx, cars, packets, ped, banner, waves: t >= 1.5 && t < 5.4 };
+        },
+      },
+      {
+        id: 'ped', label: 'Pedestrian is warned', tagline: 'BSM → the pedestrian waits',
+        why: 'Here the vehicle does not yield — instead the pedestrian is protected. The approaching car continuously broadcasts its BSM; the pedestrian’s phone / wearable receives it, works out that a vehicle is closing on the crosswalk, and warns them to wait at the curb. The person holds back while the car passes, then crosses safely behind it.',
+        messages: ['BSM'],
+        frame(t) {
+          const cx = 500;
+          const ex = lerp(-40, 980, seg(t, 0, 7));                       // car proceeds through — no braking
+          const py = t < 2 ? lerp(360, 322, seg(t, 0, 2))                // walks up toward the curb
+            : (t < 6 ? 322                                               // warned → waits at the curb
+              : lerp(322, 188, seg(t, 6, 8)));                           // crosses after the car has passed
+          const warn = t >= 2 && t < 6;
+          const cars = [{ id: 'ego', x: ex, y: G.ewLaneY, or: 'h', kind: 'car', label: 'EGO', broadcasting: t < 4.2 }];
+          const ped = { x: cx, y: py, alert: warn };
+          const packets = []; let banner;
+          if (t < 1.4) banner = { text: 'A pedestrian nears the curb as a vehicle approaches', tone: 'info' };
+          else if (t < 2.6) { packets.push({ ...lerpPt({ x: ex, y: G.ewLaneY }, { x: cx, y: py }, seg(t, 1.4, 2.6)), label: 'BSM', tone: TONE.green }); banner = { text: 'The vehicle broadcasts its BSM → the pedestrian’s device receives it', tone: 'info', sub: 'closing vehicle detected' }; }
+          else if (t < 6) banner = { text: '⚠ VEHICLE APPROACHING — the pedestrian waits at the curb', tone: 'warn' };
+          else banner = { text: 'The car has passed — pedestrian crosses safely behind it', tone: 'ok' };
+          return { layout: 'straightH', infra: 'none', crosswalk: cx, cars, packets, ped, banner, waves: t < 4.2 };
+        },
+      },
+    ],
   },
   {
     id: 'bsw', category: 'V2P', icon: '🚲', title: 'Cyclist / VRU Awareness', tagline: 'A cyclist in your blind spot',
@@ -1456,8 +1482,14 @@ function ScenarioPlayer({ scn }) {
 function UseCasesTab() {
   const [id, setId] = useState(SCENARIOS[0].id);
   const [open, setOpen] = useState({});   // all categories collapsed by default
+  const [variantId, setVariantId] = useState(null);
   const scn = SCENARIOS.find((s) => s.id === id);
   const cat = CATEGORIES.find((c) => c.id === scn.category);
+  // reset to the first variant whenever the scenario changes
+  useEffect(() => { setVariantId(scn.variants ? scn.variants[0].id : null); }, [id]);
+  const variant = scn.variants ? (scn.variants.find((v) => v.id === variantId) || scn.variants[0]) : null;
+  // effective scenario: base scenario with the active variant's frame/why/messages/tagline
+  const eff = variant ? { ...scn, ...variant } : scn;
   return (
     <div className="flex h-full min-h-0">
       {/* scenario list, grouped by communication category */}
@@ -1493,21 +1525,30 @@ function UseCasesTab() {
         })}
       </div>
 
-      {/* player */}
-      <ScenarioPlayer scn={scn} />
+      {/* player (+ variant toggle when the scenario has alternate perspectives) */}
+      <div className="flex-1 min-w-0 flex flex-col">
+        {scn.variants && (
+          <div className="px-4 pt-4">
+            <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-1">Perspective</div>
+            <Segmented value={variant.id} onChange={setVariantId}
+              options={scn.variants.map((v) => ({ value: v.id, label: v.label }))} />
+          </div>
+        )}
+        <ScenarioPlayer key={id + '-' + (variantId || '')} scn={eff} />
+      </div>
 
       {/* explainer */}
       <div className="w-80 shrink-0 border-l border-zinc-800 bg-zinc-950/60 p-4 overflow-auto">
-        <div className="flex items-center gap-2 mb-1"><span className="text-2xl">{scn.icon}</span><h3 className="text-base font-bold text-slate-100">{scn.title}</h3></div>
+        <div className="flex items-center gap-2 mb-1"><span className="text-2xl">{eff.icon}</span><h3 className="text-base font-bold text-slate-100">{eff.title}</h3></div>
         <div className="flex items-center gap-2 mb-3">
           <span className="rounded bg-neon-cyan/15 text-neon-cyan text-[10px] font-bold px-1.5 py-0.5">{cat.label}</span>
-          <span className="text-[12px] text-neon-cyan">{scn.tagline}</span>
+          <span className="text-[12px] text-neon-cyan">{eff.tagline}</span>
         </div>
-        <p className="text-[13px] leading-relaxed text-slate-300">{scn.why}</p>
+        <p className="text-[13px] leading-relaxed text-slate-300">{eff.why}</p>
         <div className="mt-4">
           <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-1.5">Messages involved</div>
           <div className="flex flex-wrap gap-1.5">
-            {scn.messages.map((m) => <span key={m} className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 font-mono text-[11px] text-neon-violet">{m}</span>)}
+            {eff.messages.map((m) => <span key={m} className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 font-mono text-[11px] text-neon-violet">{m}</span>)}
           </div>
         </div>
         <div className="mt-6 rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-[11px] text-slate-400 leading-relaxed">
