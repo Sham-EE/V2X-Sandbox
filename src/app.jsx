@@ -148,26 +148,26 @@ function linkStreams(a, b, dir, enabled, mapStore) {
   const showDown = dir === 'fwd' || dir === 'both';
   const showUp = dir === 'rev' || dir === 'both';
   const out = [];
-  const push = (from, to, m) => { if (on(m)) out.push({ from: { x: from.x, y: from.y }, to: { x: to.x, y: to.y }, label: m, color: MSG_COLOR[m] }); };
+  const push = (from, to, m, d) => { if (on(m)) out.push({ from: { x: from.x, y: from.y }, to: { x: to.x, y: to.y }, label: m, color: MSG_COLOR[m], dir: d }); };
   const kind = connKind(a.type, b.type);
 
   if (kind === 'signal') {                        // the TC physically drives the light
     const tc = a.type === 'tc' ? a : b, sig = a.type === 'tc' ? b : a;
-    if (showDown) out.push({ from: { x: tc.x, y: tc.y }, to: { x: sig.x, y: sig.y }, label: 'phase', color: '#fbbf24' });
+    if (showDown) out.push({ from: { x: tc.x, y: tc.y }, to: { x: sig.x, y: sig.y }, label: 'phase', color: '#fbbf24', dir: 'ctl' });
     return out;
   }
   if (kind === 'v2p') {                           // pedestrian ↔ vehicle / RSU (both ways)
     const ped = a.type === 'ped' ? a : b, other = a.type === 'ped' ? b : a;
-    if (showUp) push(ped, other, 'PSM');                                   // VRU announces itself
-    if (showDown) push(other, ped, other.type === 'rsu' ? 'SPaT' : 'BSM'); // RSU→ped: crossing timing · vehicle→ped: BSM to warn the phone
+    if (showUp) push(ped, other, 'PSM', 'up');                                   // VRU announces itself
+    if (showDown) push(other, ped, other.type === 'rsu' ? 'SPaT' : 'BSM', 'down'); // RSU→ped: crossing timing · vehicle→ped: BSM to warn the phone
     return out;
   }
   if (kind === 'v2v') {                           // BSM exchanged both ways
-    if (showUp) { push(a, b, 'BSM'); push(b, a, 'BSM'); }
+    if (showUp) { push(a, b, 'BSM', 'up'); push(b, a, 'BSM', 'up'); }
     return out;
   }
   if (kind === 'generic') {
-    if (showDown) out.push({ from: { x: a.x, y: a.y }, to: { x: b.x, y: b.y }, label: 'data', color: MSG_COLOR.data });
+    if (showDown) out.push({ from: { x: a.x, y: a.y }, to: { x: b.x, y: b.y }, label: 'data', color: MSG_COLOR.data, dir: 'down' });
     return out;
   }
   // ethernet / wireless — real bidirectional V2I traffic.
@@ -177,9 +177,51 @@ function linkStreams(a, b, dir, enabled, mapStore) {
   const down = kind === 'wireless'
     ? ['SPaT', 'MAP', 'TIM', 'SSM']
     : (mapStore === 'tc' ? ['SPaT', 'MAP', 'SSM'] : ['SPaT', 'SSM']);
-  if (showDown) down.forEach((m) => push(s, d, m));
-  if (showUp) ['BSM', 'SRM'].forEach((m) => push(d, s, m));
+  if (showDown) down.forEach((m) => push(s, d, m, 'down'));
+  if (showUp) ['BSM', 'SRM'].forEach((m) => push(d, s, m, 'up'));
   return out;
+}
+
+// Representative message sizes/rates — used for the backhaul bandwidth meter.
+const MSG_SPEC = { SPaT: { bytes: 100, hz: 10 }, MAP: { bytes: 1000, hz: 1 }, TIM: { bytes: 300, hz: 1 }, SSM: { bytes: 60, hz: 2 }, BSM: { bytes: 300, hz: 10 }, SRM: { bytes: 80, hz: 2 }, PSM: { bytes: 200, hz: 5 } };
+// Approx. downstream load the TC pushes onto the cabinet wire (kbps). MAP only
+// rides the wire when it is stored on the TC — that's the tradeoff, quantified.
+function backhaulKbps(enabled, mapStore) {
+  const msgs = ['SPaT', 'SSM'].concat(mapStore === 'tc' ? ['MAP'] : []);
+  let bps = 0;
+  msgs.forEach((m) => { if (enabled[m] !== false) { const s = MSG_SPEC[m]; bps += s.bytes * s.hz * 8; } });
+  return Math.round(bps / 1000);
+}
+
+// Cross-links from the sim to the Glossary.
+const MSG_GLOSSARY = { SPaT: 'SPaT (Signal Phase and Timing)', MAP: 'MAP (Intersection Geometry)', BSM: 'BSM (Basic Safety Message)', PSM: 'PSM (Personal Safety Message)', SRM: 'SRM / SSM', SSM: 'SRM / SSM', TIM: 'TIM (Traveler Information Message)' };
+const DEVICE_GLOSSARY = { tc: 'Traffic Controller (TC)', rsu: 'Roadside Unit (RSU)', obu: 'On-Board Unit (OBU)', ped: 'VRU (Vulnerable Road User)' };
+// Resolve a use-case message/label to a matching Glossary term (or null).
+function glossaryTermFor(label) {
+  if (MSG_GLOSSARY[label]) return MSG_GLOSSARY[label];
+  for (const g of GLOSSARY) { const it = g.items.find((i) => i.term === label || i.term.startsWith(label + ' ')); if (it) return it.term; }
+  return null;
+}
+
+// Representative decoded payload for a clicked packet, reflecting the live
+// security/format state so "what breaks" shows up in the decode too.
+function decodePacket(msg, ctx) {
+  const sec = ctx.secure
+    ? { ieee1609dot2: 'signed · ECDSA-P256', certificate: 'PA5F…9C2E', verified: true }
+    : { ieee1609dot2: 'UNSIGNED', verified: false, note: 'OBU drops this frame per IEEE 1609.2' };
+  if (ctx.formatOk === false) return { messageId: msg, payload: '??? raw NTCIP 1202 bytes — never converted to J2735', decodable: false, security: sec };
+  const base = {
+    SPaT: { messageId: 'SPaT', intersectionId: 12109, signalGroup: 4, eventState: 'STOP_AND_REMAIN', minEndTime: '+9.0 s', maxEndTime: '+14.0 s' },
+    MAP: { messageId: 'MAP', intersectionId: 12109, refPoint: { lat: 42.30931, lon: -83.06985 }, lanes: 8, laneWidth_cm: 366, revision: 3 },
+    BSM: { messageId: 'BSM', tempId: '0x9F3A21', secMark: 34210, lat: 42.30925, lon: -83.06940, speed_mps: 13.4, heading_deg: 271.0, brakeApplied: false },
+    PSM: { messageId: 'PSM', userType: 'pedestrian', tempId: '0x4C07', lat: 42.30902, lon: -83.06972, speed_mps: 1.3, heading_deg: 12.0 },
+    SRM: { messageId: 'SRM', requestor: 'ambulance', requestedSignalGroup: 4, eta_s: 6.5, priorityLevel: 7 },
+    SSM: { messageId: 'SSM', requestId: 41, status: 'granted', signalGroup: 4 },
+    TIM: { messageId: 'TIM', advisory: 'reduced speed / work zone', advisorySpeed_kph: 45, appliesTo: 'lane 2, next 300 m' },
+    phase: { control: 'NTCIP 1202 phase/timing (not a J2735 radio message)', phase: 2, state: 'GREEN', greenTime_s: 12 },
+    data: { note: 'generic link payload' },
+  }[msg] || { messageId: msg };
+  return (msg === 'phase' || msg === 'data') ? base : { ...base, security: sec };
 }
 
 // Explanations shown in the connection detail panel.
@@ -217,6 +259,18 @@ function Segmented({ value, onChange, options }) {
       ))}
     </div>
   );
+}
+
+// Minimal syntax-colored JSON renderer for the packet inspector.
+function JsonView({ data, depth }) {
+  const d = depth || 1;
+  const pad = { paddingLeft: d * 12 };
+  if (data === null) return <span className="text-neon-red">null</span>;
+  if (Array.isArray(data)) return <span>[{data.map((v, i) => <div key={i} style={pad}><JsonView data={v} depth={d + 1} />{i < data.length - 1 ? ',' : ''}</div>)}]</span>;
+  if (typeof data === 'object') return (<span>{'{'}{Object.entries(data).map(([k, v], i, arr) => (<div key={k} style={pad}><span className="text-neon-cyan">{k}</span><span className="text-slate-500">: </span><JsonView data={v} depth={d + 1} />{i < arr.length - 1 ? ',' : ''}</div>))}{'}'}</span>);
+  if (typeof data === 'string') return <span className="text-neon-green">"{data}"</span>;
+  if (typeof data === 'boolean') return <span className="text-neon-amber">{String(data)}</span>;
+  return <span className="text-neon-violet">{String(data)}</span>;
 }
 
 /* =====================================================================
@@ -399,7 +453,7 @@ function SpecSheet({ type, model }) {
   );
 }
 
-function WorldBuilderTab() {
+function WorldBuilderTab({ openGlossary }) {
   const prefs = lsGet('v2x_wb_prefs', {});              // restore UI state across reloads
   const startWorld = loadWorlds().find((w) => w.id === prefs.activeId) || null;
   const [objects, setObjects] = useState(() => (startWorld ? startWorld.objects : []));
@@ -418,6 +472,7 @@ function WorldBuilderTab() {
   const [worldName, setWorldName] = useState(startWorld ? startWorld.name : '');
   const [undoStack, setUndo] = useState([]);
   const [redoStack, setRedo] = useState([]);
+  const [packetInspect, setPacketInspect] = useState(null); // clicked-packet drawer
   const simRaf = useRef(null);
   const svgRef = useRef(null);
   const fileRef = useRef(null);                        // hidden <input type=file> for import
@@ -612,6 +667,24 @@ function WorldBuilderTab() {
   const roads = objects.filter((o) => TYPES[o.type].cat === 'road');
   const devices = objects.filter((o) => TYPES[o.type].cat === 'device');
 
+  // ----- "what breaks": per-RSU security (1609.2) + protocol conversion -----
+  const rsuSecure = (o) => o.secure !== false;      // default ON
+  const rsuConvert = (o) => o.convert !== false;    // default ON
+  // Is a Classic (NTCIP-only) TC feeding this RSU over the cabinet wire?
+  const upstreamClassic = (rsuId) => {
+    const link = conns.find((c) => (c.from === rsuId && byId[c.to]?.type === 'tc') || (c.to === rsuId && byId[c.from]?.type === 'tc'));
+    if (!link) return false;
+    const tc = byId[link.from]?.type === 'tc' ? byId[link.from] : byId[link.to];
+    const model = MODELS.tc.find((m) => m.id === tc.modelId);
+    return model?.gen === 'Classic';
+  };
+  // Fault applied to a stream on a wireless (RSU↔OBU) link, else null.
+  const streamFault = (rsu, classic, st) => {
+    if (!rsuSecure(rsu)) return 'security';                                   // unsigned → OBU rejects
+    if (st.dir === 'down' && classic && !rsuConvert(rsu)) return 'format';    // raw NTCIP never converted
+    return null;
+  };
+
   const paletteGroups = [
     { title: 'Templates', items: ['intersection'] },
     { title: 'Devices', items: ['tc', 'rsu', 'obu', 'signal', 'ped'] },
@@ -778,22 +851,33 @@ function WorldBuilderTab() {
 
             {/* ---- "Simulate this world": packets flowing across every wired link ---- */}
             {sim && (
-              <g style={{ pointerEvents: 'none' }}>
-                {devices.filter((o) => o.type === 'rsu').map((o) => [0, 1].map((k) => (
-                  <circle key={o.id + 'bw' + k} cx={o.x} cy={o.y} r={22 + k * 16} fill="none" stroke="#a78bfa" strokeWidth="2"
-                    opacity="0.5" className="radiowave" style={{ animationDelay: k * 0.4 + 's' }} />
-                )))}
+              <g>
+                {devices.filter((o) => o.type === 'rsu').map((o) => (
+                  <g key={o.id + 'rsu'} style={{ pointerEvents: 'none' }}>
+                    {[0, 1].map((k) => <circle key={k} cx={o.x} cy={o.y} r={22 + k * 16} fill="none" stroke="#a78bfa" strokeWidth="2" opacity="0.5" className="radiowave" style={{ animationDelay: k * 0.4 + 's' }} />)}
+                    {/* security / conversion status badges */}
+                    <text x={o.x} y={o.y - 30} textAnchor="middle" className="text-[13px]">{rsuSecure(o) ? '🔒' : '🔓'}</text>
+                    {upstreamClassic(o.id) && !rsuConvert(o) && <text x={o.x + 20} y={o.y - 30} textAnchor="middle" className="text-[13px]">⚠️</text>}
+                  </g>
+                ))}
                 {conns.map((c) => {
                   const a = byId[c.from], b = byId[c.to]; if (!a || !b) return null;
                   const streams = linkStreams(a, b, dirMode, enabled, mapStore);
+                  const kind = connKind(a.type, b.type);
+                  const rsu = kind === 'wireless' ? (a.type === 'rsu' ? a : b) : null;
+                  const classic = rsu ? upstreamClassic(rsu.id) : false;
                   return streams.map((st, idx) => {
-                    // stagger each message along the link so they read as a train
                     const p = (phase + idx / streams.length) % 1;
                     const x = st.from.x + (st.to.x - st.from.x) * p, y = st.from.y + (st.to.y - st.from.y) * p;
+                    const fault = rsu ? streamFault(rsu, classic, st) : null;
+                    const col = fault ? '#f87171' : st.color;
+                    const open = () => setPacketInspect({ msg: st.label, fromType: null, toType: null, secure: !(fault === 'security'), formatOk: fault !== 'format', fault, aType: a.type, bType: b.type });
                     return (
-                      <g key={c.id + '-' + idx} transform={`translate(${x},${y})`}>
-                        <rect x="-9" y="-9" width="18" height="18" rx="4" fill={st.color + '55'} stroke={st.color} strokeWidth="2" className="glow-cyan" />
-                        <text x="0" y="-12" textAnchor="middle" fill={st.color} className="text-[8px] font-bold">{st.label}</text>
+                      <g key={c.id + '-' + idx} transform={`translate(${x},${y})`} style={{ cursor: 'pointer' }} onPointerDown={(e) => { e.stopPropagation(); open(); }}>
+                        <rect x="-10" y="-10" width="20" height="20" rx="4" fill={col + '55'} stroke={col} strokeWidth="2" className="glow-cyan" />
+                        {fault === 'security' && <text x="0" y="5" textAnchor="middle" className="fill-neon-red text-[13px] font-bold">✖</text>}
+                        {fault === 'format' && <text x="0" y="5" textAnchor="middle" className="fill-neon-red text-[14px] font-bold">?</text>}
+                        <text x="0" y="-13" textAnchor="middle" fill={col} className="text-[8px] font-bold">{fault === 'security' ? 'rejected' : fault === 'format' ? 'unformatted' : st.label}</text>
                       </g>
                     );
                   });
@@ -812,6 +896,46 @@ function WorldBuilderTab() {
             </div>
           </div>
         )}
+
+        {/* packet inspector drawer (click a flowing packet during simulation) */}
+        {packetInspect && (() => {
+          const pk = packetInspect;
+          const term = MSG_GLOSSARY[pk.msg];
+          const gi = term ? (() => { for (const g of GLOSSARY) { const it = g.items.find((i) => i.term === term); if (it) return it; } return null; })() : null;
+          const faultText = pk.fault === 'security'
+            ? 'Unsigned frame → the OBU rejects it (IEEE 1609.2). Turn Security signing ON at the RSU.'
+            : pk.fault === 'format'
+              ? 'A Classic (NTCIP-only) TC feeds this RSU, but Protocol conversion is OFF — the vehicle receives raw bytes it can’t decode.'
+              : null;
+          return (
+            <div className="absolute inset-y-4 right-4 z-20 w-[360px] max-w-[85%] rounded-xl border border-zinc-700 bg-zinc-950/95 backdrop-blur flex flex-col shadow-2xl">
+              <header className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <span className={'h-2 w-2 rounded-full ' + (pk.fault ? 'bg-neon-red' : 'bg-neon-green') + ' animate-pulse'} />
+                  <h3 className="text-sm font-semibold text-slate-100 font-mono">{pk.msg}</h3>
+                  <span className="text-[11px] text-slate-500">{pk.aType} ↔ {pk.bType}</span>
+                </div>
+                <button onClick={() => setPacketInspect(null)} className="text-slate-400 hover:text-white text-lg leading-none">✕</button>
+              </header>
+              <div className="flex-1 overflow-auto p-4 space-y-3">
+                {faultText && <div className="rounded-lg border border-red-700/60 bg-red-500/10 p-2.5 text-[12px] text-red-200">⚠ {faultText}</div>}
+                <div>
+                  <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-1">Decoded payload (representative)</div>
+                  <div className="rounded-lg border border-zinc-800 bg-black/60 p-3"><pre className="font-mono text-[12px] leading-relaxed whitespace-pre-wrap break-words"><JsonView data={decodePacket(pk.msg, { secure: pk.secure, formatOk: pk.formatOk })} /></pre></div>
+                </div>
+                {gi && gi.format && (
+                  <div>
+                    <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-1">Wire format</div>
+                    <pre className="rounded-lg border border-zinc-800 bg-black/60 p-3 font-mono text-[11px] leading-relaxed text-slate-200 overflow-auto whitespace-pre max-h-52">{gi.format}</pre>
+                  </div>
+                )}
+                {term && openGlossary && (
+                  <button onClick={() => openGlossary(term)} className="w-full rounded-lg border border-neon-cyan/50 bg-neon-cyan/10 px-3 py-2 text-sm text-neon-cyan hover:bg-neon-cyan/20">View “{pk.msg}” in Glossary ↗</button>
+                )}
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       {/* properties / spec + simulation panel */}
@@ -845,7 +969,14 @@ function WorldBuilderTab() {
             <div className="text-[12px] font-semibold text-slate-200">{MAP_INFO[mapStore].title}</div>
             <div className="mt-1 text-[11px] text-emerald-300/90"><span className="font-semibold">✔ </span>{MAP_INFO[mapStore].benefit}</div>
             <div className="mt-1 text-[11px] text-amber-300/90"><span className="font-semibold">✖ </span>{MAP_INFO[mapStore].draw}</div>
-            <div className="mt-1.5 text-[10px] text-slate-500">Watch the TC→RSU wire during Forward: MAP only rides it when stored on the TC.</div>
+            {/* quantified backhaul meter */}
+            {(() => { const kb = backhaulKbps(enabled, mapStore); const max = 20; return (
+              <div className="mt-2">
+                <div className="flex items-center justify-between text-[11px]"><span className="text-slate-400">Est. cabinet backhaul (downstream)</span><span className="font-mono text-slate-200">≈ {kb} kbps</span></div>
+                <div className="mt-1 h-2 rounded-full bg-zinc-800 overflow-hidden"><div className="h-full rounded-full transition-all" style={{ width: Math.min(100, (kb / max) * 100) + '%', background: mapStore === 'tc' ? '#fbbf24' : '#34d399' }} /></div>
+                <div className="mt-1 text-[10px] text-slate-500">SPaT 100 B @ 10 Hz · SSM 60 B @ 2 Hz{mapStore === 'tc' ? ' · MAP 1 KB @ 1 Hz (+8 kbps)' : ' · MAP broadcast locally by RSU (0 on wire)'}</div>
+              </div>
+            ); })()}
           </div>
         </div>
 
@@ -894,6 +1025,26 @@ function WorldBuilderTab() {
             )}
 
             <SpecSheet type={selObj.type} model={MODELS[selObj.type]?.find((m) => m.id === selObj.modelId)} />
+
+            {/* RSU behaviour toggles — the "what breaks" controls */}
+            {selObj.type === 'rsu' && (
+              <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 space-y-2">
+                <div className="text-[10px] uppercase tracking-widest text-slate-500">RSU behaviour</div>
+                {[{ k: 'secure', on: rsuSecure(selObj), label: 'Security signing (1609.2)', sub: 'off → OBU rejects unsigned frames' },
+                  { k: 'convert', on: rsuConvert(selObj), label: 'Protocol conversion', sub: 'NTCIP 1202 → J2735 (matters for a Classic TC)' }].map((t) => (
+                  <button key={t.k} onClick={() => { pushUndo(); setObjects((prev) => prev.map((o) => o.id === selObj.id ? { ...o, [t.k]: !t.on } : o)); }}
+                    className="w-full flex items-center justify-between gap-2 rounded-md border border-zinc-700 bg-zinc-900/70 px-2.5 py-1.5 text-left hover:border-zinc-500">
+                    <span className="min-w-0"><span className="block text-[12px] text-slate-100">{t.label}</span><span className="block text-[10px] text-slate-500 truncate">{t.sub}</span></span>
+                    <span className={'relative h-5 w-9 shrink-0 rounded-full transition ' + (t.on ? 'bg-neon-green' : 'bg-zinc-700')}><span className={'absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ' + (t.on ? 'left-4' : 'left-0.5')} /></span>
+                  </button>
+                ))}
+                <p className="text-[10px] text-slate-500">Run the sim to watch packets get rejected/unformatted when these are off.</p>
+              </div>
+            )}
+
+            {DEVICE_GLOSSARY[selObj.type] && openGlossary && (
+              <button onClick={() => openGlossary(DEVICE_GLOSSARY[selObj.type])} className="w-full rounded-lg border border-neon-cyan/40 bg-neon-cyan/5 px-3 py-2 text-[13px] text-neon-cyan hover:bg-neon-cyan/15">View in Glossary ↗</button>
+            )}
 
             <div className="flex gap-2 pt-1">
               <button
@@ -1610,7 +1761,7 @@ function ScenarioPlayer({ scn }) {
   );
 }
 
-function UseCasesTab() {
+function UseCasesTab({ openGlossary }) {
   const [id, setId] = useState(SCENARIOS[0].id);
   const [open, setOpen] = useState({});   // all categories collapsed by default
   const [variantId, setVariantId] = useState(null);
@@ -1677,9 +1828,14 @@ function UseCasesTab() {
         </div>
         <p className="text-[13px] leading-relaxed text-slate-300">{eff.why}</p>
         <div className="mt-4">
-          <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-1.5">Messages involved</div>
+          <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-1.5">Messages involved <span className="text-slate-600">· click to look up</span></div>
           <div className="flex flex-wrap gap-1.5">
-            {eff.messages.map((m) => <span key={m} className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 font-mono text-[11px] text-neon-violet">{m}</span>)}
+            {eff.messages.map((m) => {
+              const term = glossaryTermFor(m);
+              return term && openGlossary
+                ? <button key={m} onClick={() => openGlossary(term)} className="rounded-md border border-neon-violet/40 bg-neon-violet/10 px-2 py-1 font-mono text-[11px] text-neon-violet hover:bg-neon-violet/20">{m} ↗</button>
+                : <span key={m} className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 font-mono text-[11px] text-slate-300">{m}</span>;
+            })}
           </div>
         </div>
         <div className="mt-6 rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-[11px] text-slate-400 leading-relaxed">
@@ -1906,12 +2062,17 @@ Public structure (IEEE); certificates issued by the SCMS.` },
   ]},
 ];
 
-function GlossaryTab() {
+function GlossaryTab({ target }) {
   const [q, setQ] = useState('');
   const [openGroups, setOpenGroups] = useState(() => GLOSSARY.map((g) => g.group));
   const [selected, setSelected] = useState(GLOSSARY[0].items[0]);
   const [view, setView] = useState('def');   // 'def' | 'format'
   useEffect(() => { setView('def'); }, [selected]);   // reset toggle when the term changes
+  // jump to a term when cross-linked from another tab
+  useEffect(() => {
+    if (!target) return;
+    for (const g of GLOSSARY) { const it = g.items.find((i) => i.term === target.term); if (it) { setSelected(it); setQ(''); return; } }
+  }, [target]);
   const ql = q.trim().toLowerCase();
   const match = (it) => !ql || it.term.toLowerCase().includes(ql) || it.def.toLowerCase().includes(ql);
   const toggleGroup = (g) => setOpenGroups((prev) => (prev.includes(g) ? prev.filter((x) => x !== g) : [...prev, g]));
@@ -1994,7 +2155,9 @@ const TABS = [
 
 function App() {
   const [tab, setTab] = useState(() => lsGet('v2x_tab', 'builder'));
+  const [glossaryTarget, setGlossaryTarget] = useState(null);
   useEffect(() => { lsSet('v2x_tab', tab); }, [tab]);
+  const openGlossary = (term) => { setGlossaryTarget({ term, k: Date.now() }); setTab('glossary'); };
   return (
     <div className="h-screen flex flex-col bg-zinc-950">
       <header className="shrink-0 border-b border-zinc-800 bg-zinc-950/80 backdrop-blur">
@@ -2018,9 +2181,9 @@ function App() {
         </div>
       </header>
       <main className="flex-1 min-h-0">
-        {tab === 'builder' && <WorldBuilderTab />}
-        {tab === 'cases' && <UseCasesTab />}
-        {tab === 'glossary' && <GlossaryTab />}
+        {tab === 'builder' && <WorldBuilderTab openGlossary={openGlossary} />}
+        {tab === 'cases' && <UseCasesTab openGlossary={openGlossary} />}
+        {tab === 'glossary' && <GlossaryTab target={glossaryTarget} />}
       </main>
     </div>
   );
