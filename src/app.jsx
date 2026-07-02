@@ -36,6 +36,7 @@ const TYPES = {
   ped:   { label: 'Pedestrian (VRU)',    cat: 'device', size: { w: 40, h: 60 }, glyph: '🚶' },
   roadH: { label: 'Road — Horizontal',   cat: 'road',   size: { w: 340, h: 108 }, glyph: '↔' },
   roadV: { label: 'Road — Vertical',     cat: 'road',   size: { w: 108, h: 340 }, glyph: '↕' },
+  intersection: { label: '4-Way Intersection', cat: 'template', glyph: '🚦' },
 };
 
 const MODELS = {
@@ -142,7 +143,7 @@ function orientLink(a, b) {
 // Packet streams for one link, honoring the direction mode and enabled messages.
 // dir: 'fwd' = infrastructure→vehicle · 'rev' = vehicle→infrastructure · 'both'.
 // Returns [{ from:{x,y}, to:{x,y}, label, color }].
-function linkStreams(a, b, dir, enabled) {
+function linkStreams(a, b, dir, enabled, mapStore) {
   const on = (m) => enabled[m] !== false;
   const showDown = dir === 'fwd' || dir === 'both';
   const showUp = dir === 'rev' || dir === 'both';
@@ -150,26 +151,56 @@ function linkStreams(a, b, dir, enabled) {
   const push = (from, to, m) => { if (on(m)) out.push({ from: { x: from.x, y: from.y }, to: { x: to.x, y: to.y }, label: m, color: MSG_COLOR[m] }); };
   const kind = connKind(a.type, b.type);
 
-  if (kind === 'v2p') {                          // PSM broadcast from the pedestrian
-    const ped = a.type === 'ped' ? a : b, other = a.type === 'ped' ? b : a;
-    if (showUp) push(ped, other, 'PSM');
+  if (kind === 'signal') {                        // the TC physically drives the light
+    const tc = a.type === 'tc' ? a : b, sig = a.type === 'tc' ? b : a;
+    if (showDown) out.push({ from: { x: tc.x, y: tc.y }, to: { x: sig.x, y: sig.y }, label: 'phase', color: '#fbbf24' });
     return out;
   }
-  if (kind === 'v2v') {                          // BSM exchanged both ways
+  if (kind === 'v2p') {                           // pedestrian ↔ vehicle / RSU (both ways)
+    const ped = a.type === 'ped' ? a : b, other = a.type === 'ped' ? b : a;
+    if (showUp) push(ped, other, 'PSM');                                   // VRU announces itself
+    if (showDown) push(other, ped, other.type === 'rsu' ? 'SPaT' : 'BSM'); // RSU→ped: crossing timing · vehicle→ped: BSM to warn the phone
+    return out;
+  }
+  if (kind === 'v2v') {                           // BSM exchanged both ways
     if (showUp) { push(a, b, 'BSM'); push(b, a, 'BSM'); }
     return out;
   }
-  if (kind === 'signal' || kind === 'generic') {
+  if (kind === 'generic') {
     if (showDown) out.push({ from: { x: a.x, y: a.y }, to: { x: b.x, y: b.y }, label: 'data', color: MSG_COLOR.data });
     return out;
   }
-  // ethernet / wireless — real bidirectional V2I traffic
+  // ethernet / wireless — real bidirectional V2I traffic.
+  // MAP rides the cabinet wire only when it is stored on the TC; the RSU always
+  // broadcasts MAP over the air (whether held locally or relaying the TC's copy).
   const [s, d] = orientLink(a, b);
-  const down = kind === 'wireless' ? ['SPaT', 'MAP', 'TIM', 'SSM'] : ['SPaT', 'MAP', 'SSM'];
+  const down = kind === 'wireless'
+    ? ['SPaT', 'MAP', 'TIM', 'SSM']
+    : (mapStore === 'tc' ? ['SPaT', 'MAP', 'SSM'] : ['SPaT', 'SSM']);
   if (showDown) down.forEach((m) => push(s, d, m));
   if (showUp) ['BSM', 'SRM'].forEach((m) => push(d, s, m));
   return out;
 }
+
+// Explanations shown in the connection detail panel.
+const CONN_DESC = {
+  ethernet: 'Wired in-cabinet backhaul (IEEE 802.3). Carries NTCIP 1202 phase/timing, and — if MAP is stored on the TC — the SAE J2735 SPaT/MAP down to the RSU.',
+  wireless: 'The over-the-air C-V2X / DSRC link. SPaT / MAP / TIM are broadcast to vehicles; BSM / SRM come back from them.',
+  v2v: 'Direct vehicle-to-vehicle exchange of BSMs (position, speed, heading, braking) — works with no infrastructure at all.',
+  v2p: 'Vehicle-to-pedestrian. The VRU device broadcasts a PSM; in return an RSU can send pedestrian crossing timing (SPaT) and vehicles their BSM, so the phone can warn the pedestrian.',
+  signal: 'The controller’s physical phase & timing control that energizes the signal head (red / yellow / green). It is NOT a radio link — but its live state is exactly what the SPaT message reports over the air.',
+  generic: 'A generic link between two devices.',
+};
+
+// MAP storage tradeoffs, surfaced in the Simulation panel.
+const MAP_INFO = {
+  rsu: { title: 'MAP on the RSU (local)',
+         benefit: 'Low backhaul load & latency; keeps broadcasting even if the TC link drops. Standard for static geometry.',
+         draw: 'Provisioned per-RSU — changing lane geometry means re-flashing every unit (config-drift risk).' },
+  tc:  { title: 'MAP on the TC (central)',
+         benefit: 'Single source of truth — edit geometry once at the controller and it propagates to the RSU.',
+         draw: 'Adds constant MAP traffic on the wire; needs a healthy TC link and a J2735-capable ATC.' },
+};
 
 /* =====================================================================
    2. UI PRIMITIVES
@@ -213,7 +244,7 @@ function svgPoint(svg, cx, cy) {
 }
 
 // --- centered SVG artwork for each device/road type ---
-function DeviceArt({ type, model }) {
+function DeviceArt({ type, model, sig }) {
   const label = model ? `${model.vendor} ${model.name}` : TYPES[type].label;
   const tag = (t) => <text y={TYPES[type].size.h / 2 + 16} textAnchor="middle" className="fill-slate-400 text-[10px]">{t}</text>;
   switch (type) {
@@ -251,16 +282,18 @@ function DeviceArt({ type, model }) {
           {tag(label)}
         </g>
       );
-    case 'signal':
+    case 'signal': {
+      const st = sig || 'red';   // when simulating & wired to a TC, cycles green→yellow→red
       return (
         <g>
           <rect x="-13" y="-38" width="26" height="76" rx="6" className="fill-zinc-950 stroke-zinc-600" strokeWidth="2" />
-          <circle cx="0" cy="-22" r="8" className="fill-neon-red glow-red" />
-          <circle cx="0" cy="0" r="8" className="fill-zinc-700" />
-          <circle cx="0" cy="22" r="8" className="fill-zinc-700" />
+          <circle cx="0" cy="-22" r="8" className={st === 'red' ? 'fill-neon-red glow-red' : 'fill-zinc-800'} />
+          <circle cx="0" cy="0" r="8" className={st === 'yellow' ? 'fill-neon-amber glow-amber' : 'fill-zinc-800'} />
+          <circle cx="0" cy="22" r="8" className={st === 'green' ? 'fill-neon-green glow-green' : 'fill-zinc-800'} />
           {tag(model ? model.name : 'Signal Head')}
         </g>
       );
+    }
     case 'ped':
       return (
         <g>
@@ -327,6 +360,7 @@ function WorldBuilderTab() {
   const [phase, setPhase] = useState(0);              // looping 0..1 clock for packet flow
   const [dirMode, setDirMode] = useState('both');     // 'fwd' | 'rev' | 'both'
   const [enabled, setEnabled] = useState({});         // per-message on/off (missing = on)
+  const [mapStore, setMapStore] = useState('rsu');    // where MAP geometry lives: 'rsu' | 'tc'
   const [worlds, setWorlds] = useState(loadWorlds);   // saved worlds (localStorage)
   const [activeId, setActiveId] = useState(null);     // currently-loaded world id
   const [worldName, setWorldName] = useState('');
@@ -345,6 +379,20 @@ function WorldBuilderTab() {
     const o = clampC({ id: uid(type), type, modelId, x: snapV(pos.x), y: snapV(pos.y) });
     setObjects((prev) => [...prev, o]);
     setSel({ kind: 'obj', id: o.id });
+  };
+
+  // Drop a whole pre-wired 4-way intersection: roads, TC, RSU, four signal
+  // heads (each wired to the TC) and an approaching vehicle wired to the RSU.
+  const addIntersection = (pos) => {
+    const cx = pos.x, cy = pos.y;
+    const mk = (type, dx, dy) => clampC({ id: uid(type), type, modelId: MODELS[type]?.[0]?.id, x: cx + dx, y: cy + dy });
+    const roadH = mk('roadH', 0, 0), roadV = mk('roadV', 0, 0);
+    const sN = mk('signal', -70, -74), sE = mk('signal', 74, -70), sS = mk('signal', 70, 74), sW = mk('signal', -74, 70);
+    const tc = mk('tc', -232, 96), rsu = mk('rsu', 232, -96), obu = mk('obu', 60, 150);
+    const c = (from, to) => ({ id: uid('c'), from: from.id, to: to.id });
+    setObjects((prev) => [...prev, roadH, roadV, sN, sE, sS, sW, tc, rsu, obu]);
+    setConns((prev) => [...prev, c(tc, rsu), c(tc, sN), c(tc, sE), c(tc, sS), c(tc, sW), c(rsu, obu)]);
+    setSel(null);
   };
   const removeSelected = useCallback(() => {
     if (!sel) return;
@@ -391,11 +439,12 @@ function WorldBuilderTab() {
   useEffect(() => { if (sim && conns.length === 0) setSim(false); }, [sim, conns.length]);
 
   // palette drop
+  const placeAt = (type, pos) => (type === 'intersection' ? addIntersection(pos) : addObject(type, pos));
   const onDrop = (e) => {
     e.preventDefault();
     const type = e.dataTransfer.getData('v2x/type');
     if (!type || !svgRef.current) return;
-    addObject(type, svgPoint(svgRef.current, e.clientX, e.clientY));
+    placeAt(type, svgPoint(svgRef.current, e.clientX, e.clientY));
   };
 
   // pointer interactions on the canvas
@@ -447,6 +496,7 @@ function WorldBuilderTab() {
   const devices = objects.filter((o) => TYPES[o.type].cat === 'device');
 
   const paletteGroups = [
+    { title: 'Templates', items: ['intersection'] },
     { title: 'Devices', items: ['tc', 'rsu', 'obu', 'signal', 'ped'] },
     { title: 'Scenery', items: ['roadH', 'roadV'] },
   ];
@@ -490,8 +540,9 @@ function WorldBuilderTab() {
               {g.items.map((t) => (
                 <div key={t} draggable
                   onDragStart={(e) => e.dataTransfer.setData('v2x/type', t)}
-                  onClick={() => addObject(t, { x: WB.w / 2, y: WB.h / 2 })}
-                  className="cursor-grab active:cursor-grabbing rounded-lg border border-zinc-700 bg-zinc-900/70 px-2 py-2 text-center hover:border-neon-cyan/60 transition">
+                  onClick={() => placeAt(t, { x: WB.w / 2, y: WB.h / 2 })}
+                  className={'cursor-grab active:cursor-grabbing rounded-lg border bg-zinc-900/70 px-2 py-2 text-center transition ' +
+                    (t === 'intersection' ? 'border-neon-violet/50 hover:border-neon-violet col-span-2' : 'border-zinc-700 hover:border-neon-cyan/60')}>
                   <div className="text-xl leading-none">{TYPES[t].glyph}</div>
                   <div className="mt-1 text-[10px] text-slate-300 leading-tight">{TYPES[t].label}</div>
                 </div>
@@ -574,13 +625,19 @@ function WorldBuilderTab() {
               const sz = TYPES[o.type].size;
               const model = MODELS[o.type]?.find((m) => m.id === o.modelId);
               const isSel = sel?.kind === 'obj' && sel.id === o.id;
+              // While simulating, a signal head wired to a TC visibly cycles — proof the TC drives it.
+              let sig;
+              if (o.type === 'signal' && sim) {
+                const wiredToTC = conns.some((c) => { const oth = c.from === o.id ? byId[c.to] : c.to === o.id ? byId[c.from] : null; return oth && oth.type === 'tc'; });
+                if (wiredToTC) sig = phase < 0.5 ? 'green' : phase < 0.62 ? 'yellow' : 'red';
+              }
               return (
                 <g key={o.id} transform={`translate(${o.x},${o.y})`} className={'spart ' + (isSel ? 'part-hi' : '')}
                    style={{ cursor: 'move' }} onPointerDown={(e) => startDrag(o, e)}>
                   {/* selection outline + hit padding */}
                   <rect x={-sz.w / 2 - 4} y={-sz.h / 2 - 4} width={sz.w + 8} height={sz.h + 8} rx="8"
                     fill="transparent" stroke={isSel ? '#22d3ee' : 'transparent'} strokeDasharray="6 5" />
-                  <DeviceArt type={o.type} model={model} />
+                  <DeviceArt type={o.type} model={model} sig={sig} />
                   {/* wiring port (its own handler pre-empts the group drag) */}
                   <circle cx="0" cy={-sz.h / 2 - 14} r="6" className="fill-zinc-950 stroke-neon-cyan" strokeWidth="2"
                     style={{ cursor: 'crosshair' }} onPointerDown={(e) => startWire(o, e)} />
@@ -597,7 +654,7 @@ function WorldBuilderTab() {
                 )))}
                 {conns.map((c) => {
                   const a = byId[c.from], b = byId[c.to]; if (!a || !b) return null;
-                  const streams = linkStreams(a, b, dirMode, enabled);
+                  const streams = linkStreams(a, b, dirMode, enabled, mapStore);
                   return streams.map((st, idx) => {
                     // stagger each message along the link so they read as a train
                     const p = (phase + idx / streams.length) % 1;
@@ -649,6 +706,16 @@ function WorldBuilderTab() {
             })}
           </div>
           <p className="mt-2 text-[11px] text-slate-500">Pick messages, then hit <span className="text-neon-cyan">▶ Simulate this world</span> in the toolbar.</p>
+
+          <div className="text-[10px] uppercase tracking-widest text-slate-500 mt-3 mb-1.5">MAP geometry stored on</div>
+          <Segmented value={mapStore} onChange={setMapStore}
+            options={[{ value: 'rsu', label: 'RSU' }, { value: 'tc', label: 'TC' }]} />
+          <div className="mt-2 rounded-lg border border-zinc-800 bg-zinc-900/50 p-2.5">
+            <div className="text-[12px] font-semibold text-slate-200">{MAP_INFO[mapStore].title}</div>
+            <div className="mt-1 text-[11px] text-emerald-300/90"><span className="font-semibold">✔ </span>{MAP_INFO[mapStore].benefit}</div>
+            <div className="mt-1 text-[11px] text-amber-300/90"><span className="font-semibold">✖ </span>{MAP_INFO[mapStore].draw}</div>
+            <div className="mt-1.5 text-[10px] text-slate-500">Watch the TC→RSU wire during Forward: MAP only rides it when stored on the TC.</div>
+          </div>
         </div>
 
         {!sel && <div className="text-sm text-slate-500">Select a device or link to see its properties &amp; spec sheet.</div>}
@@ -663,6 +730,7 @@ function WorldBuilderTab() {
                 <div>{TYPES[a.type].label} ↔ {TYPES[b.type].label}</div>
                 <div className="mt-1" style={{ color: CONN_STYLE[kind].color }}>{CONN_STYLE[kind].label}</div>
               </div>
+              <p className="text-[12px] leading-relaxed text-slate-400">{CONN_DESC[kind]}</p>
               <button onClick={removeSelected} className="w-full rounded-lg border border-red-700/60 bg-red-500/10 px-3 py-2 text-sm text-red-300 hover:bg-red-500/20">Delete link</button>
             </div>
           );
