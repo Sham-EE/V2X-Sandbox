@@ -698,6 +698,19 @@ const CONN_STYLE = {
     label: 'link'
   }
 };
+const PACKET_LABEL = {
+  ethernet: 'NTCIP',
+  wireless: 'J2735',
+  signal: 'phase',
+  generic: 'data'
+};
+
+// Orient a link so simulated packets flow the way real V2X data would:
+// upstream (TC) → RSU → downstream (OBU / VRU).
+function orientLink(a, b) {
+  const rank = t => t === 'tc' ? 0 : t === 'rsu' ? 1 : 2;
+  return rank(a.type) <= rank(b.type) ? [a, b] : [b, a];
+}
 
 /* =====================================================================
    2. UI PRIMITIVES
@@ -1015,6 +1028,9 @@ function WorldBuilderTab() {
   const [snap, setSnap] = useState(true);
   const drag = useRef(null); // {id, ox, oy}
   const [wiring, setWiring] = useState(null); // {from, x, y}
+  const [sim, setSim] = useState(false); // "Simulate this world" running?
+  const [phase, setPhase] = useState(0); // looping 0..1 clock for packet flow
+  const simRaf = useRef(null);
   const svgRef = useRef(null);
   const byId = useMemo(() => Object.fromEntries(objects.map(o => [o.id, o])), [objects]);
   const selObj = sel?.kind === 'obj' ? byId[sel.id] : null;
@@ -1062,6 +1078,22 @@ function WorldBuilderTab() {
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
   }, [sel, removeSelected]);
+
+  // "Simulate this world" — a looping clock that drives packets along every wired link.
+  useEffect(() => {
+    if (!sim) return;
+    const start = performance.now();
+    const loop = now => {
+      setPhase((now - start) / 2200 % 1);
+      simRaf.current = requestAnimationFrame(loop);
+    };
+    simRaf.current = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(simRaf.current);
+  }, [sim]);
+  // stop simulating if all links vanish
+  useEffect(() => {
+    if (sim && conns.length === 0) setSim(false);
+  }, [sim, conns.length]);
 
   // palette drop
   const onDrop = e => {
@@ -1207,9 +1239,19 @@ function WorldBuilderTab() {
       setObjects([]);
       setConns([]);
       setSel(null);
+      setSim(false);
     },
     className: "rounded px-2 py-0.5 text-slate-400 hover:text-neon-red"
-  }, "Clear all")), /*#__PURE__*/React.createElement("div", {
+  }, "Clear all"), /*#__PURE__*/React.createElement("span", {
+    className: "text-zinc-700"
+  }, "|"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      if (conns.length) setSim(s => !s);
+    },
+    disabled: !conns.length,
+    title: conns.length ? '' : 'Wire at least one link first',
+    className: 'rounded px-2 py-0.5 font-semibold transition ' + (sim ? 'bg-neon-red/20 text-neon-red' : conns.length ? 'bg-neon-cyan/20 text-neon-cyan hover:bg-neon-cyan/30' : 'text-slate-600 cursor-not-allowed')
+  }, sim ? '■ Stop simulation' : '▶ Simulate this world')), /*#__PURE__*/React.createElement("div", {
     className: "h-full rounded-xl border border-zinc-800 bg-zinc-950/40 overflow-hidden",
     onDragOver: e => e.preventDefault(),
     onDrop: onDrop
@@ -1348,7 +1390,56 @@ function WorldBuilderTab() {
       },
       onPointerDown: e => startWire(o, e)
     }));
-  }))), objects.length === 0 && /*#__PURE__*/React.createElement("div", {
+  }), sim && /*#__PURE__*/React.createElement("g", {
+    style: {
+      pointerEvents: 'none'
+    }
+  }, devices.filter(o => o.type === 'rsu').map(o => [0, 1].map(k => /*#__PURE__*/React.createElement("circle", {
+    key: o.id + 'bw' + k,
+    cx: o.x,
+    cy: o.y,
+    r: 22 + k * 16,
+    fill: "none",
+    stroke: "#a78bfa",
+    strokeWidth: "2",
+    opacity: "0.5",
+    className: "radiowave",
+    style: {
+      animationDelay: k * 0.4 + 's'
+    }
+  }))), conns.map(c => {
+    const a = byId[c.from],
+      b = byId[c.to];
+    if (!a || !b) return null;
+    const kind = connKind(a.type, b.type);
+    const [s, d] = orientLink(a, b);
+    const st = CONN_STYLE[kind];
+    return [0, 0.5].map((off, i) => {
+      const p = (phase + off) % 1;
+      const x = s.x + (d.x - s.x) * p,
+        y = s.y + (d.y - s.y) * p;
+      return /*#__PURE__*/React.createElement("g", {
+        key: c.id + '-' + i,
+        transform: `translate(${x},${y})`
+      }, /*#__PURE__*/React.createElement("rect", {
+        x: "-10",
+        y: "-10",
+        width: "20",
+        height: "20",
+        rx: "5",
+        fill: st.color + '55',
+        stroke: st.color,
+        strokeWidth: "2",
+        className: "glow-cyan"
+      }), i === 0 && /*#__PURE__*/React.createElement("text", {
+        x: "0",
+        y: "-14",
+        textAnchor: "middle",
+        fill: st.color,
+        className: "text-[9px] font-bold"
+      }, PACKET_LABEL[kind]));
+    });
+  })))), objects.length === 0 && /*#__PURE__*/React.createElement("div", {
     className: "pointer-events-none absolute inset-0 flex items-center justify-center"
   }, /*#__PURE__*/React.createElement("div", {
     className: "text-center text-slate-500"

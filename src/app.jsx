@@ -124,6 +124,14 @@ const CONN_STYLE = {
   signal:   { color: '#64748b', dash: '0', label: 'Signal control' },
   generic:  { color: '#64748b', dash: '4 6', label: 'link' },
 };
+const PACKET_LABEL = { ethernet: 'NTCIP', wireless: 'J2735', signal: 'phase', generic: 'data' };
+
+// Orient a link so simulated packets flow the way real V2X data would:
+// upstream (TC) → RSU → downstream (OBU / VRU).
+function orientLink(a, b) {
+  const rank = (t) => (t === 'tc' ? 0 : t === 'rsu' ? 1 : 2);
+  return rank(a.type) <= rank(b.type) ? [a, b] : [b, a];
+}
 
 /* =====================================================================
    2. UI PRIMITIVES
@@ -271,6 +279,9 @@ function WorldBuilderTab() {
   const [snap, setSnap] = useState(true);
   const drag = useRef(null);                          // {id, ox, oy}
   const [wiring, setWiring] = useState(null);         // {from, x, y}
+  const [sim, setSim] = useState(false);              // "Simulate this world" running?
+  const [phase, setPhase] = useState(0);              // looping 0..1 clock for packet flow
+  const simRaf = useRef(null);
   const svgRef = useRef(null);
 
   const byId = useMemo(() => Object.fromEntries(objects.map((o) => [o.id, o])), [objects]);
@@ -303,6 +314,17 @@ function WorldBuilderTab() {
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
   }, [sel, removeSelected]);
+
+  // "Simulate this world" — a looping clock that drives packets along every wired link.
+  useEffect(() => {
+    if (!sim) return;
+    const start = performance.now();
+    const loop = (now) => { setPhase(((now - start) / 2200) % 1); simRaf.current = requestAnimationFrame(loop); };
+    simRaf.current = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(simRaf.current);
+  }, [sim]);
+  // stop simulating if all links vanish
+  useEffect(() => { if (sim && conns.length === 0) setSim(false); }, [sim, conns.length]);
 
   // palette drop
   const onDrop = (e) => {
@@ -400,7 +422,13 @@ function WorldBuilderTab() {
           <span className="text-slate-400">{devices.length} device{devices.length !== 1 ? 's' : ''} · {conns.length} link{conns.length !== 1 ? 's' : ''}</span>
           <span className="text-zinc-700">|</span>
           <button onClick={() => setSnap((s) => !s)} className={'rounded px-2 py-0.5 ' + (snap ? 'bg-neon-cyan/20 text-neon-cyan' : 'text-slate-400 hover:text-white')}>Snap {snap ? 'on' : 'off'}</button>
-          <button onClick={() => { setObjects([]); setConns([]); setSel(null); }} className="rounded px-2 py-0.5 text-slate-400 hover:text-neon-red">Clear all</button>
+          <button onClick={() => { setObjects([]); setConns([]); setSel(null); setSim(false); }} className="rounded px-2 py-0.5 text-slate-400 hover:text-neon-red">Clear all</button>
+          <span className="text-zinc-700">|</span>
+          <button onClick={() => { if (conns.length) setSim((s) => !s); }} disabled={!conns.length}
+            title={conns.length ? '' : 'Wire at least one link first'}
+            className={'rounded px-2 py-0.5 font-semibold transition ' + (sim ? 'bg-neon-red/20 text-neon-red' : conns.length ? 'bg-neon-cyan/20 text-neon-cyan hover:bg-neon-cyan/30' : 'text-slate-600 cursor-not-allowed')}>
+            {sim ? '■ Stop simulation' : '▶ Simulate this world'}
+          </button>
         </div>
 
         <div className="h-full rounded-xl border border-zinc-800 bg-zinc-950/40 overflow-hidden"
@@ -469,6 +497,32 @@ function WorldBuilderTab() {
                 </g>
               );
             })}
+
+            {/* ---- "Simulate this world": packets flowing across every wired link ---- */}
+            {sim && (
+              <g style={{ pointerEvents: 'none' }}>
+                {devices.filter((o) => o.type === 'rsu').map((o) => [0, 1].map((k) => (
+                  <circle key={o.id + 'bw' + k} cx={o.x} cy={o.y} r={22 + k * 16} fill="none" stroke="#a78bfa" strokeWidth="2"
+                    opacity="0.5" className="radiowave" style={{ animationDelay: k * 0.4 + 's' }} />
+                )))}
+                {conns.map((c) => {
+                  const a = byId[c.from], b = byId[c.to]; if (!a || !b) return null;
+                  const kind = connKind(a.type, b.type);
+                  const [s, d] = orientLink(a, b);
+                  const st = CONN_STYLE[kind];
+                  return [0, 0.5].map((off, i) => {
+                    const p = (phase + off) % 1;
+                    const x = s.x + (d.x - s.x) * p, y = s.y + (d.y - s.y) * p;
+                    return (
+                      <g key={c.id + '-' + i} transform={`translate(${x},${y})`}>
+                        <rect x="-10" y="-10" width="20" height="20" rx="5" fill={st.color + '55'} stroke={st.color} strokeWidth="2" className="glow-cyan" />
+                        {i === 0 && <text x="0" y="-14" textAnchor="middle" fill={st.color} className="text-[9px] font-bold">{PACKET_LABEL[kind]}</text>}
+                      </g>
+                    );
+                  });
+                })}
+              </g>
+            )}
           </svg>
         </div>
 
