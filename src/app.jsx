@@ -259,6 +259,11 @@ const CONN_DESC = {
   generic: 'A generic link between two devices.',
 };
 
+// For links whose real path isn't a simple A↔B (shown as a chain in the panel).
+const CONN_PIPELINE = {
+  signal: ['Traffic Controller', 'Load Switch', 'Conduit ↑ pole', 'Signal Head'],
+};
+
 // MAP storage tradeoffs, surfaced in the Simulation panel.
 const MAP_INFO = {
   rsu: { title: 'MAP on the RSU (local)',
@@ -911,20 +916,11 @@ function WorldBuilderTab({ openGlossary }) {
               const la = lp(a), lb = lp(b);
               const st = CONN_STYLE[connKind(a.type, b.type)];
               const isSel = sel?.kind === 'conn' && sel.id === c.id;
-              const isSignal = connKind(a.type, b.type) === 'signal';
-              const mid = { x: (la.x + lb.x) / 2, y: (la.y + lb.y) / 2 };
               return (
                 <g key={c.id} style={{ cursor: 'pointer' }} onPointerDown={(e) => { e.stopPropagation(); setSel({ kind: 'conn', id: c.id }); }}>
                   <line x1={la.x} y1={la.y} x2={lb.x} y2={lb.y} stroke="transparent" strokeWidth="14" />
                   <line x1={la.x} y1={la.y} x2={lb.x} y2={lb.y} stroke={st.color} strokeWidth={isSel ? 4 : 2.5}
                     strokeDasharray={st.dash} className={isSel ? 'glow-cyan' : ''} />
-                  {/* load switch: the TC drives the head THROUGH a cabinet relay, not directly */}
-                  {isSignal && (
-                    <g transform={`translate(${mid.x},${mid.y})`}>
-                      <rect x="-13" y="-9" width="26" height="18" rx="3" className="fill-zinc-800 stroke-amber-400" strokeWidth="1.5" />
-                      <text x="0" y="4" textAnchor="middle" className="fill-amber-300 text-[9px] font-bold">LS</text>
-                    </g>
-                  )}
                 </g>
               );
             })}
@@ -1131,8 +1127,19 @@ function WorldBuilderTab({ openGlossary }) {
             <div className="space-y-3">
               <h3 className="text-sm font-semibold text-slate-100">Connection</h3>
               <div className="rounded-lg border border-zinc-800 bg-black/40 p-3 text-[12px] text-slate-300">
-                <div>{TYPES[a.type].label} ↔ {TYPES[b.type].label}</div>
-                <div className="mt-1" style={{ color: CONN_STYLE[kind].color }}>{CONN_STYLE[kind].label}</div>
+                {CONN_PIPELINE[kind] ? (
+                  <div className="flex flex-wrap items-center gap-x-1 gap-y-1 font-mono text-[11px]">
+                    {CONN_PIPELINE[kind].map((s, i, arr) => (
+                      <React.Fragment key={s}>
+                        <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-slate-200">{s}</span>
+                        {i < arr.length - 1 && <span className="text-slate-500">→</span>}
+                      </React.Fragment>
+                    ))}
+                  </div>
+                ) : (
+                  <div>{TYPES[a.type].label} ↔ {TYPES[b.type].label}</div>
+                )}
+                <div className="mt-1.5" style={{ color: CONN_STYLE[kind].color }}>{CONN_STYLE[kind].label}</div>
               </div>
               <p className="text-[12px] leading-relaxed text-slate-400">{CONN_DESC[kind]}</p>
               <button onClick={removeSelected} className="w-full rounded-lg border border-red-700/60 bg-red-500/10 px-3 py-2 text-sm text-red-300 hover:bg-red-500/20">Delete link</button>
