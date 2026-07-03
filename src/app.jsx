@@ -647,14 +647,21 @@ function DeviceArt({ type, model, sig, rot, flip }) {
       );
     }
     case 'mast': {
-      const s = flip ? -1 : 1;   // flip mirrors the arm to the other side of the pole
+      const s = flip ? -1 : 1;    // flip mirrors the arm to the other side of the pole
+      const poleX = 114 * s;      // arm & signal heads are on the -s side; the RSU mounts on the +s (outside) side
+      const mountX = 158 * s, mountY = -66;
       return (
         <g>
           <rect x={s > 0 ? 98 : -130} y="94" width="32" height="12" rx="2" className="fill-zinc-700 stroke-zinc-600" />
-          <line x1={114 * s} y1="100" x2={114 * s} y2="-96" className="stroke-zinc-500" strokeWidth="10" strokeLinecap="round" />
-          <line x1={114 * s} y1="-92" x2={-122 * s} y2="-92" className="stroke-zinc-500" strokeWidth="9" strokeLinecap="round" />
+          <line x1={poleX} y1="100" x2={poleX} y2="-96" className="stroke-zinc-500" strokeWidth="10" strokeLinecap="round" />
+          <line x1={poleX} y1="-92" x2={-122 * s} y2="-92" className="stroke-zinc-500" strokeWidth="9" strokeLinecap="round" />
+          {/* signal / sensor mounting nubs along the arm */}
           {[-104, -52, 8, 64].map((mx, i) => <rect key={i} x={mx * s - 4} y="-101" width="8" height="16" rx="2" className="fill-zinc-600 stroke-zinc-400" strokeWidth="1" />)}
-          <text x="0" y="-108" textAnchor="middle" className="fill-slate-500 text-[10px]">pole + mast arm — mount signals, sensors &amp; RSU</text>
+          {/* RSU mounting slot — a bracket + ghost footprint on the OUTSIDE of the pole */}
+          <line x1={poleX} y1={mountY} x2={mountX - 30 * s} y2={mountY} className="stroke-zinc-500" strokeWidth="5" strokeLinecap="round" />
+          <rect x={mountX - 30} y={mountY - 16} width="60" height="32" rx="6" fill="none" className="stroke-zinc-500" strokeWidth="1.5" strokeDasharray="4 4" />
+          <text x={mountX} y={mountY + 4} textAnchor="middle" className="fill-slate-500 text-[9px] font-semibold">RSU</text>
+          <text x={-8 * s} y="-108" textAnchor="middle" className="fill-slate-500 text-[10px]">mast arm — mount signals &amp; sensors</text>
         </g>
       );
     }
@@ -898,39 +905,50 @@ function WorldBuilderTab({ openGlossary }) {
       setWiring({ ...wiring, x: p.x, y: p.y });
     }
   };
-  // Mast geometry (world coords), honoring the arm's flip. The arm is a
-  // horizontal line at the top of the pole; the pole sits at one end of it.
+  // Mast geometry (world coords), honoring the arm's flip. The arm (with the
+  // signal heads) extends to one side of the pole; the RSU slot is on the OTHER
+  // (outside) side — matching the visible ghost slot drawn on the mast.
   const mastGeo = (mst) => {
     const s = mst.flip ? -1 : 1;
     const armY = mst.y - 92;
     const poleX = mst.x + 114 * s;
     const ends = [mst.x + 114 * s, mst.x - 122 * s];
-    return { armY, poleX, x0: Math.min(...ends), x1: Math.max(...ends) };
+    return { s, armY, poleX, x0: Math.min(...ends), x1: Math.max(...ends), rsuX: mst.x + 158 * s, rsuY: mst.y - 66 };
   };
-  // Signals & sensors "click into" the arm; an RSU attaches to the pole side.
+  // Signals & sensors "click into" the arm; an RSU drops into the pole-side slot.
+  // Picks the nearest compatible mast slot within a generous capture radius.
   const snapToMast = (o) => {
     const onArm = o.type === 'signal' || isSensor(o.type);
     if (!onArm && o.type !== 'rsu') return null;
+    let best = null, bestD = Infinity;
     for (const mst of objects) {
       if (mst.type !== 'mast' || mst.id === o.id) continue;
       const g = mastGeo(mst);
-      if (onArm && o.x >= g.x0 - 12 && o.x <= g.x1 + 12 && Math.abs(o.y - g.armY) < 72) {
-        return { x: Math.max(g.x0, g.x1 === g.x0 ? g.x0 : Math.min(g.x1, o.x)), y: g.armY + TYPES[o.type].size.h / 2 - 4 };
-      }
-      if (o.type === 'rsu' && Math.abs(o.x - g.poleX) < 46 && o.y > g.armY - 8 && o.y < mst.y + 70) {
-        const side = mst.flip ? 1 : -1;   // mount on the arm-facing side of the pole
-        return { x: g.poleX + 20 * side, y: g.armY + 40 };
+      if (onArm) {
+        // anywhere along the arm span (generous vertical + horizontal margin)
+        if (o.x >= g.x0 - 40 && o.x <= g.x1 + 40 && Math.abs(o.y - g.armY) < 96) {
+          const x = Math.min(g.x1, Math.max(g.x0, o.x));
+          const d = Math.abs(o.y - g.armY) + Math.max(0, g.x0 - o.x) + Math.max(0, o.x - g.x1);
+          if (d < bestD) { bestD = d; best = { x, y: g.armY + TYPES[o.type].size.h / 2 - 4 }; }
+        }
+      } else {   // rsu → the outside slot
+        const d = Math.hypot(o.x - g.rsuX, o.y - g.rsuY);
+        const nearPole = Math.abs(o.x - g.poleX) < 84 && o.y > mst.y - 120 && o.y < mst.y + 60;
+        if (d < 130 || nearPole) { if (d < bestD) { bestD = d; best = { x: g.rsuX, y: g.rsuY }; } }
       }
     }
-    return null;
+    return best;
   };
   const endInteraction = (e) => {
     // a drag that actually moved is one undo step
     if (drag.current && drag.current.moved) {
       const pre = drag.current.pre; setUndo((u) => [...u.slice(-49), pre]); setRedo([]);
-      // snap a dragged signal/sensor onto a nearby mast arm ("click into")
-      const id = drag.current.id;
-      const dragged = objects.find((o) => o.id === id);
+      // snap a dragged signal/sensor/RSU onto its mast slot ("click into"),
+      // using the pointer-derived final centre for accuracy
+      const { id, ox, oy } = drag.current;
+      const base = objects.find((o) => o.id === id);
+      let dragged = base;
+      if (base && svgRef.current) { const p = svgPoint(svgRef.current, e.clientX, e.clientY); dragged = { ...base, x: p.x - ox, y: p.y - oy }; }
       const snap = dragged && snapToMast(dragged);
       if (snap) setObjects((prev) => prev.map((o) => o.id === id ? { ...o, x: snap.x, y: snap.y } : o));
     }
@@ -1188,6 +1206,19 @@ function WorldBuilderTab({ openGlossary }) {
                 </g>
               );
             })}
+
+            {/* live snap preview — ghost footprint + pulse where the dragged part will click in */}
+            {drag.current && (() => {
+              const o = byId[drag.current.id]; if (!o) return null;
+              const snap = snapToMast(o); if (!snap) return null;
+              const sz = TYPES[o.type].size;
+              return (
+                <g style={{ pointerEvents: 'none' }}>
+                  <rect x={snap.x - sz.w / 2} y={snap.y - sz.h / 2} width={sz.w} height={sz.h} rx="8" fill="#22d3ee1f" stroke="#22d3ee" strokeWidth="2" strokeDasharray="5 4" />
+                  <circle cx={snap.x} cy={snap.y} r="10" fill="none" stroke="#22d3ee" strokeWidth="2" className="halo" />
+                </g>
+              );
+            })()}
 
             {/* ---- "Simulate this world": packets flowing across every wired link ---- */}
             {sim && (
