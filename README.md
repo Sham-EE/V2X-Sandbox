@@ -17,9 +17,12 @@ is inlined into that one file.
   direction/messages, MAP-storage tradeoff, per-RSU security & conversion), and
   drivable vehicles form/break links as they pass through RSU range. Click a
   flowing packet for its decoded payload. Save/load/export worlds; undo/redo.
-- **Use Cases** — 23 animated scenarios grouped by V2I / V2V / V2P / V2N
-  (emergency preemption, RLVW, GLOSA, FCW/EEBL/IMA, platooning, work-zone worker
-  safety, freight/transit priority, rail-crossing, …) with a scrub timeline.
+- **Use Cases** — animated scenarios grouped by V2I / V2V / V2P / V2N
+  (signal priority & preemption, RLVW, GLOSA, FCW/EEBL/IMA, platooning, work-zone
+  worker safety, network hazard warnings, rail-crossing, …) with a scrub timeline.
+  Closely-related scenarios share a tile and a variant toggle (e.g. **Signal
+  Priority & Preemption** switches Emergency / Transit / Freight; **Network Hazard
+  Warning** switches Work-zone / Black-ice / Stalled-vehicle).
 - **Test Your Knowledge** — a shuffled, scored multiple-choice quiz.
 - **Device Anatomy** — annotated cutaways: wire up a real traffic-controller
   cabinet (Controller → load switch → field terminal → conduit up the pole to the
@@ -65,4 +68,18 @@ open index.html   # view it
 ```
 
 Edit **`src/app.jsx`** (and `src/styles.css` for styling), then rebuild. Never
-edit `index.html` by hand — it's generated.
+edit `index.html` by hand — it's generated. **Always commit the rebuilt
+`index.html` alongside your `src/` changes** — CI rejects a stale artifact.
+
+## CI & deploy
+
+`.github/workflows/ci.yml` runs on every push and pull request:
+
+1. `npm ci` → `npm run build`,
+2. **fails if the committed `index.html` is out of sync** with `src/` (the
+   "did you forget to rebuild?" guard — a `git diff --exit-code` on the artifact),
+3. `npm test`.
+
+On push to `main` it then publishes the self-contained `index.html` to **GitHub
+Pages**. One-time setup after pushing to GitHub: **Settings → Pages → Source →
+"GitHub Actions"**.

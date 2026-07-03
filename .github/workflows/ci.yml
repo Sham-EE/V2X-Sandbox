@@ -1,0 +1,78 @@
+# CI + GitHub Pages deploy for the V2X Playground.
+#
+#   • On every push/PR: install deps, rebuild the single-file app, FAIL if the
+#     committed index.html is out of sync with src/ (the "did you forget to
+#     rebuild?" guard), then run the test suite.
+#   • On push to main: publish the self-contained index.html to GitHub Pages.
+#
+# One-time setup after pushing this repo to GitHub:
+#   Settings → Pages → Build and deployment → Source: "GitHub Actions".
+name: CI & Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never run two Pages deploys at once; cancel superseded in-progress runs.
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the single-file app
+        run: npm run build
+
+      - name: Verify index.html is in sync with src/ (rebuild is committed)
+        run: |
+          if ! git diff --exit-code -- index.html; then
+            echo "::error::index.html is stale. Run 'node build.js' locally and commit the regenerated index.html."
+            exit 1
+          fi
+
+      - name: Run tests
+        run: npm test
+
+      - name: Stage site for Pages
+        if: github.ref == 'refs/heads/main'
+        run: |
+          mkdir -p _site
+          cp index.html _site/index.html
+
+      - name: Upload Pages artifact
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
