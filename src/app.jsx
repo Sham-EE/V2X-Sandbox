@@ -1,5 +1,5 @@
 /* =====================================================================
-   V2X Infrastructure Playground & Testing Tool
+   V2X Sandbox
    ---------------------------------------------------------------------
    Source of truth. Edit this file, then run `node build.js` to regenerate
    the self-contained (fully offline) index.html.  Tests: `npm test`.
@@ -2729,7 +2729,7 @@ function App() {
           <div className="flex items-center gap-2">
             <span className="text-xl">🚦</span>
             <div>
-              <div className="text-sm font-bold text-slate-100 leading-none">V2X Infrastructure Playground</div>
+              <div className="text-sm font-bold text-slate-100 leading-none">V2X Sandbox</div>
               <div className="text-[11px] text-slate-500">Vehicle-to-Everything · Build · Simulate · Learn</div>
             </div>
           </div>

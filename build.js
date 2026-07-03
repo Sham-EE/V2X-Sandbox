@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Build step for the V2X Playground.
+ * Build step for the V2X Sandbox.
  *
  * Produces a single, FULLY OFFLINE, self-contained `index.html`:
  *   - React + ReactDOM UMD bundles are inlined from ./vendor.
@@ -39,7 +39,7 @@ const head = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>V2X Infrastructure Playground &amp; Testing Tool</title>
+  <title>V2X Sandbox</title>
 
   <!-- ============================================================
        Single-file, 100% OFFLINE build — zero external dependencies.

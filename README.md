@@ -1,4 +1,4 @@
-# V2X Infrastructure Playground
+# V2X Sandbox
 
 An interactive, **single-file, fully-offline** tool for learning how
 Vehicle-to-Everything (V2X) systems work — traffic controllers, roadside units,

@@ -1,7 +1,7 @@
 {
-  "name": "v2x_visualizer_lt",
+  "name": "v2x-sandbox",
   "version": "1.0.0",
-  "description": "V2X Infrastructure Playground — a single-file, offline interactive tool for learning Vehicle-to-Everything (V2X) systems.",
+  "description": "V2X Sandbox — a single-file, offline interactive tool for learning Vehicle-to-Everything (V2X) systems.",
   "scripts": {
     "build": "node build.js",
     "test": "node tests/run.js"
