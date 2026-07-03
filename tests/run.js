@@ -25,7 +25,7 @@ const renders = (el, msg) => { try { RS.renderToStaticMarkup(el); pass++; } catc
 function loadApp() {
   const jsx = fs.readFileSync(path.join(ROOT, 'src/app.jsx'), 'utf8').replace(/ReactDOM\.createRoot[\s\S]*$/, '');
   const code = Babel.transform(jsx, { presets: ['react'] }).code;
-  const names = 'App,WorldBuilderTab,UseCasesTab,GlossaryTab,AnatomyTab,CabinetDiagram,RsuDiagram,ObuDiagram,FirstRun,QuizTab,MiniScene,SCENARIOS,QUIZ,GLOSSARY,linkStreams,decodePacket,liveXY,connKind,isVehicle,canRequestPriority,backhaulKbps,glossaryTermFor,validCabPair,findGlossaryItem';
+  const names = 'App,WorldBuilderTab,UseCasesTab,GlossaryTab,AnatomyTab,CabinetDiagram,RsuDiagram,ObuDiagram,FirstRun,QuizTab,MiniScene,DeviceArt,SCENARIOS,QUIZ,GLOSSARY,TYPES,MODELS,linkStreams,decodePacket,liveXY,connKind,isVehicle,isSensor,canRequestPriority,backhaulKbps,glossaryTermFor,validCabPair,findGlossaryItem';
   const factory = new Function('React', 'ReactDOM', 'window', 'document', 'performance', 'requestAnimationFrame', 'cancelAnimationFrame', 'localStorage', code + `\n;return {${names}};`);
   const win = { innerWidth: 1440, addEventListener() {}, removeEventListener() {}, location: { href: 'file:///x', hash: '' }, history: { replaceState() {} } };
   const ls = { getItem: () => null, setItem() {}, removeItem() {} };
@@ -52,6 +52,11 @@ renders(el(m.RsuDiagram), 'RsuDiagram');
 renders(el(m.ObuDiagram), 'ObuDiagram');
 renders(el(m.GlossaryTab, { sub: '', navigate: noop }), 'GlossaryTab');
 renders(el(m.GlossaryTab, { sub: encodeURIComponent('SPaT (Signal Phase and Timing)'), navigate: noop }), 'GlossaryTab(deep-link)');
+// every device type's canvas art renders (incl. the new hub / sensors / mast)
+Object.keys(m.TYPES).filter((t) => t !== 'intersection').forEach((t) => {
+  const model = m.MODELS[t] && m.MODELS[t][0];
+  renders(React.createElement('svg', null, el(m.DeviceArt, { type: t, model })), 'DeviceArt(' + t + ')');
+});
 
 // ---------- 2. connKind ----------
 console.log('• connKind');
@@ -62,6 +67,10 @@ eq(m.connKind('obu', 'obu'), 'v2v', 'obu-obu');
 eq(m.connKind('ev', 'ev'), 'v2v', 'ev-ev');
 eq(m.connKind('ped', 'rsu'), 'v2p', 'ped-rsu');
 eq(m.connKind('tc', 'signal'), 'signal', 'tc-signal');
+eq(m.connKind('lidar', 'hub'), 'sensor', 'lidar-hub = sensor feed');
+eq(m.connKind('camera', 'tc'), 'sensor', 'camera-tc = sensor feed');
+eq(m.connKind('hub', 'rsu'), 'ethernet', 'hub-rsu = backhaul');
+eq(m.connKind('hub', 'tc'), 'ethernet', 'hub-tc = backhaul');
 
 // ---------- 3. linkStreams (direction, roles, MAP storage) ----------
 console.log('• linkStreams');
@@ -77,6 +86,12 @@ eq(L(m.linkStreams(car, car, 'both', {}, 'rsu')), ['BSM', 'BSM'], 'v2v = BSM bot
 eq(L(m.linkStreams(ped, rsu, 'both', {}, 'rsu')), ['PSM', 'SPaT'], 'v2p rsu = PSM up + SPaT down');
 eq(L(m.linkStreams(ped, car, 'both', {}, 'rsu')), ['BSM', 'PSM'], 'v2p vehicle = PSM up + BSM down');
 eq(L(m.linkStreams(tc, sig, 'fwd', {}, 'rsu')), ['phase'], 'signal = phase control');
+const cam = { type: 'camera', x: 0, y: 0 }, hub = { type: 'hub', x: 80, y: 0 };
+eq(L(m.linkStreams(cam, hub, 'both', {}, 'rsu')), ['DET'], 'sensor → hub = DET feed');
+eq(L(m.linkStreams(cam, hub, 'fwd', {}, 'rsu')), [], 'sensor feed is upstream-only (no fwd)');
+ok(m.isSensor('lidar') && m.isSensor('radar') && m.isSensor('camera') && !m.isSensor('rsu'), 'isSensor');
+ok(m.MODELS.hub && m.MODELS.lidar && m.MODELS.radar && m.MODELS.camera, 'new devices have vendor spec sheets');
+ok(m.TYPES.hub && m.TYPES.mast && m.TYPES.lidar && m.TYPES.radar && m.TYPES.camera, 'new device types exist');
 ok(!m.linkStreams(rsu, car, 'both', { MAP: false }, 'rsu').some((s) => s.label === 'MAP'), 'disabling MAP removes it');
 
 // ---------- 4. decodePacket ----------
@@ -130,6 +145,9 @@ m.SCENARIOS.forEach((sc) => {
 });
 ok(frameErrs === 0, 'all scenario/variant frames render across their timeline');
 ok(m.SCENARIOS.every((s) => ['V2I', 'V2V', 'V2P', 'V2N'].includes(s.category)), 'every scenario has a valid category');
+const scnIds = m.SCENARIOS.map((s) => s.id);
+ok(scnIds.includes('sensordet') && scnIds.includes('hubfusion'), 'roadside-sensor use cases present');
+ok(m.SCENARIOS.find((s) => s.id === 'sensordet').variants.length === 3, 'sensordet toggles LiDAR/radar/camera');
 
 // ---------- 9. quiz ----------
 console.log('• quiz');

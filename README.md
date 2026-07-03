@@ -10,19 +10,22 @@ is inlined into that one file.
 
 ## What's inside (tabs)
 
-- **World Builder** — a drag-and-drop sandbox. Drop devices (TC, RSU, vehicles,
-  emergency vehicle, bus, pedestrian, signal heads, roads, or a pre-wired 4-way
-  intersection), wire them port-to-port, pick a real vendor model per device and
-  read its spec sheet, then **Simulate**: packets flow along every link (choose
-  direction/messages, MAP-storage tradeoff, per-RSU security & conversion), and
-  drivable vehicles form/break links as they pass through RSU range. Click a
-  flowing packet for its decoded payload. Save/load/export worlds; undo/redo.
+- **World Builder** — a drag-and-drop sandbox. Drop devices (TC, RSU, **V2X Hub**,
+  vehicles, emergency vehicle, bus, pedestrian, signal heads), **roadside sensors
+  (LiDAR / radar / camera)**, roads, a **pole + mast arm** (signals & sensors snap
+  onto its arm), or a pre-wired 4-way intersection. Wire them port-to-port, pick a
+  real vendor model per device and read its spec sheet, then **Simulate**: packets
+  flow along every link — including sensor **detection (DET)** feeds into the hub /
+  controller — with adjustable direction, per-message toggles, a collapsible
+  MAP-storage tradeoff, and per-RSU security & conversion. Drivable vehicles
+  form/break links in RSU range; click a packet for its decoded payload.
+  Save/load/export/share worlds; undo/redo.
 - **Use Cases** — animated scenarios grouped by V2I / V2V / V2P / V2N
   (signal priority & preemption, RLVW, GLOSA, FCW/EEBL/IMA, platooning, work-zone
-  worker safety, network hazard warnings, rail-crossing, …) with a scrub timeline.
-  Closely-related scenarios share a tile and a variant toggle (e.g. **Signal
-  Priority & Preemption** switches Emergency / Transit / Freight; **Network Hazard
-  Warning** switches Work-zone / Black-ice / Stalled-vehicle).
+  worker safety, network hazard warnings, **roadside sensor detection**, **V2X-Hub
+  sensor fusion**, …) with a scrub timeline. Closely-related scenarios share a tile
+  and a variant toggle (e.g. **Signal Priority & Preemption** switches Emergency /
+  Transit / Freight; **Roadside Sensor Detection** switches LiDAR / radar / camera).
 - **Test Your Knowledge** — a shuffled, scored multiple-choice quiz.
 - **Device Anatomy** — annotated cutaways: wire up a real traffic-controller
   cabinet (Controller → load switch → field terminal → conduit up the pole to the

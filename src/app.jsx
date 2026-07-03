@@ -36,15 +36,23 @@ const TONE = { cyan: '#22d3ee', green: '#34d399', amber: '#fbbf24', red: '#f8717
 const TYPES = {
   tc:    { label: 'Traffic Controller', cat: 'device', size: { w: 66, h: 96 }, glyph: '🗄️' },
   rsu:   { label: 'Roadside Unit (RSU)', cat: 'device', size: { w: 60, h: 44 }, glyph: '📡' },
+  hub:   { label: 'V2X Hub (edge compute)', cat: 'device', size: { w: 66, h: 52 }, glyph: '🖥️' },
   obu:   { label: 'Vehicle (OBU)',       cat: 'device', size: { w: 52, h: 90 }, glyph: '🚗' },
   ev:    { label: 'Emergency Vehicle',   cat: 'device', size: { w: 52, h: 92 }, glyph: '🚑' },
   bus:   { label: 'Bus / Transit',       cat: 'device', size: { w: 54, h: 100 }, glyph: '🚌' },
   signal:{ label: 'Signal Head',         cat: 'device', size: { w: 30, h: 78 }, glyph: '🚦' },
   ped:   { label: 'Pedestrian (VRU)',    cat: 'device', size: { w: 40, h: 60 }, glyph: '🚶' },
+  lidar: { label: 'LiDAR Sensor',        cat: 'device', size: { w: 38, h: 34 }, glyph: '🛰️' },
+  radar: { label: 'Radar Sensor',        cat: 'device', size: { w: 38, h: 34 }, glyph: '📶' },
+  camera:{ label: 'Camera / Video',      cat: 'device', size: { w: 38, h: 34 }, glyph: '📷' },
   roadH: { label: 'Road — Horizontal',   cat: 'road',   size: { w: 340, h: 108 }, glyph: '↔' },
   roadV: { label: 'Road — Vertical',     cat: 'road',   size: { w: 108, h: 340 }, glyph: '↕' },
+  mast:  { label: 'Pole + Mast Arm',     cat: 'road',   size: { w: 250, h: 210 }, glyph: '🗼' },
   intersection: { label: '4-Way Intersection', cat: 'template', glyph: '🚦' },
 };
+// Roadside detection sensors — they see the road (incl. UNEQUIPPED users with no
+// OBU/phone) and feed the infrastructure, which then speaks V2X on their behalf.
+const isSensor = (t) => t === 'lidar' || t === 'radar' || t === 'camera';
 
 const MODELS = {
   tc: [
@@ -122,6 +130,54 @@ const MODELS = {
       can: ['Send an SRM granted as priority when behind schedule (TSP)', 'Broadcast BSM like any vehicle'],
       cannot: ['Preempt / interrupt the cycle the way an emergency vehicle can'] },
   ],
+  hub: [
+    { id: 'usdot-v2xhub', vendor: 'USDOT (FHWA)', name: 'V2X Hub', gen: 'Open-source',
+      tagline: 'Open-source roadside software platform that runs plugins to fuse sensors, the controller and the RSU.',
+      specs: { Platform: 'Linux edge server', Role: 'Message broker + plugins', Inputs: 'NTCIP 1202, sensor detections', Outputs: 'SAE J2735 to the RSU', Security: 'IEEE 1609.2 (via RSU/plugin)' },
+      can: ['Fuse LiDAR / radar / camera detections into V2X messages', 'Bridge the controller (NTCIP 1202) to SAE J2735', 'Generate PSM/BSM for detected, UNEQUIPPED road users', 'Host application plugins (PedSafety, SPaT, MAP…)'],
+      cannot: ['Transmit over the air itself — it hands frames to the RSU radio', 'Physically control the signal (that is the TC)'] },
+    { id: 'generic-edge', vendor: 'Generic', name: 'Edge Compute Node', gen: 'Modern',
+      tagline: 'A roadside industrial PC hosting a V2X-Hub-style processing stack.',
+      specs: { Platform: 'Rugged x86 / ARM', Role: 'Sensor fusion + messaging', Inputs: 'Ethernet, camera, LiDAR, radar', Outputs: 'J2735 to RSU', GPU: 'Optional (AI detection)' },
+      can: ['Run AI perception on camera/LiDAR feeds', 'Aggregate multiple sensors into one scene', 'Feed the RSU a fused, signed message set'],
+      cannot: ['Replace the RSU radio or the controller'] },
+  ],
+  lidar: [
+    { id: 'ouster-os', vendor: 'Ouster', name: 'OSx digital LiDAR', gen: 'Modern',
+      tagline: 'Roadside 3-D LiDAR — precise position/shape of every road user, day or night.',
+      specs: { Type: 'Spinning digital LiDAR', Range: '~100–200 m', Output: '3-D point cloud', Detects: 'Pedestrians, cyclists, vehicles', Lighting: 'Works in total darkness' },
+      can: ['Detect UNEQUIPPED VRUs (no phone/OBU needed)', 'Give centimetre position & classification', 'Feed the V2X Hub to generate a PSM/BSM'],
+      cannot: ['Read license plates or colour (that’s a camera)', 'Talk V2X itself — it feeds the hub/RSU'] },
+    { id: 'hesai-at', vendor: 'Hesai', name: 'AT-series LiDAR', gen: 'Modern',
+      tagline: 'Long-range automotive/ITS LiDAR used for intersection perception.',
+      specs: { Type: 'Semi-solid-state', Range: '~200 m', Output: '3-D point cloud + velocity', Detects: 'All road users', Lighting: 'Independent of light' },
+      can: ['Track object trajectories through the intersection', 'Provide occlusion-resistant detection', 'Feed fusion for a full intersection scene'],
+      cannot: ['See through solid buildings', 'Broadcast messages on its own'] },
+  ],
+  radar: [
+    { id: 'smartmicro-traffic', vendor: 'Smartmicro', name: 'Traffic Radar', gen: 'Modern',
+      tagline: 'Roadside traffic radar — speed & range of approaching vehicles in any weather.',
+      specs: { Type: 'mmWave Doppler radar', Range: '~250 m', Measures: 'Speed, range, lane', Detects: 'Vehicles (some VRUs)', Weather: 'Fog / rain / snow OK' },
+      can: ['Replace inductive loops for actuated detection', 'Measure approach speed for dilemma-zone protection', 'Work where cameras are blinded (fog, glare, night)'],
+      cannot: ['Classify finely or read a scene like a camera', 'Send V2X — it feeds the controller/hub'] },
+    { id: 'wavetronix-matrix', vendor: 'Wavetronix', name: 'SmartSensor Matrix', gen: 'Modern',
+      tagline: 'Radar detection array used for stop-bar and advance vehicle detection.',
+      specs: { Type: 'FMCW radar', Coverage: 'Multi-lane', Measures: 'Presence, count, speed', Detects: 'Vehicles', Weather: 'All-weather' },
+      can: ['Stop-bar + advance detection without loops', 'Provide actuation calls to the controller'],
+      cannot: ['Detect small VRUs reliably', 'Produce imagery'] },
+  ],
+  camera: [
+    { id: 'flir-trafisense', vendor: 'Teledyne FLIR', name: 'TrafiSense AI', gen: 'Modern',
+      tagline: 'AI video/thermal detection camera — classifies and counts road users.',
+      specs: { Type: 'Video + thermal + AI', Detects: 'Vehicles, peds, cyclists', Output: 'Detections / classifications', Extras: 'Red-light & wrong-way events', Lighting: 'Thermal works at night' },
+      can: ['Classify road users and read the scene', 'Detect red-light-running & wrong-way events', 'Feed detections to the controller / V2X Hub'],
+      cannot: ['Give exact 3-D position like LiDAR', 'See well in heavy fog / glare (thermal helps)'] },
+    { id: 'miovision-camera', vendor: 'Miovision', name: 'Smart Camera', gen: 'Modern',
+      tagline: 'Intersection camera with onboard analytics for detection and counts.',
+      specs: { Type: 'Video + edge AI', Detects: 'Multimodal road users', Output: 'Actuation + analytics', Comms: 'Ethernet to cabinet' },
+      can: ['Actuated detection + turning-movement counts', 'Feed a V2X Hub for pedestrian safety apps'],
+      cannot: ['Operate blind (needs a usable image)'] },
+  ],
   signal: [
     { id: 'sig-3', vendor: 'Generic', name: '3-Section Head', gen: '—',
       tagline: 'Standard red / yellow / green ball head.', specs: { Sections: '3 (R,Y,G)', Control: 'One signal group' },
@@ -140,7 +196,9 @@ const canRequestPriority = (t) => t === 'ev' || t === 'bus';   // authorized to 
 // Which two device types form which link when wired together.
 function connKind(a, b) {
   const s = new Set([a, b]);
+  if (isSensor(a) || isSensor(b)) return 'sensor';                 // LiDAR/radar/camera detection feed
   if (s.has('tc') && s.has('rsu')) return 'ethernet';
+  if (s.has('hub') && (s.has('tc') || s.has('rsu'))) return 'ethernet';  // V2X Hub backhaul
   if (s.has('ped')) return 'v2p';
   if (isVehicle(a) && isVehicle(b)) return 'v2v';
   if (s.has('rsu') && (isVehicle(a) || isVehicle(b))) return 'wireless';
@@ -153,16 +211,17 @@ const CONN_STYLE = {
   v2v:      { color: '#34d399', dash: '3 7', label: 'V2V · BSM' },
   v2p:      { color: '#fbbf24', dash: '3 7', label: 'V2P · PSM' },
   signal:   { color: '#64748b', dash: '0', label: 'Signal control' },
+  sensor:   { color: '#38bdf8', dash: '2 5', label: 'Sensor · detections' },
   generic:  { color: '#64748b', dash: '4 6', label: 'link' },
 };
 
 // SAE J2735 messages the user can fine-tune, and their packet colors.
 const ALL_MSGS = ['SPaT', 'MAP', 'TIM', 'SSM', 'BSM', 'SRM', 'PSM'];
-const MSG_COLOR = { SPaT: '#22d3ee', MAP: '#22d3ee', TIM: '#a78bfa', SSM: '#34d399', BSM: '#34d399', SRM: '#fbbf24', PSM: '#fbbf24', data: '#64748b' };
+const MSG_COLOR = { SPaT: '#22d3ee', MAP: '#22d3ee', TIM: '#a78bfa', SSM: '#34d399', BSM: '#34d399', SRM: '#fbbf24', PSM: '#fbbf24', DET: '#38bdf8', data: '#64748b' };
 
-// Orient a wired link so packets flow upstream (TC) → RSU → downstream (OBU/VRU).
+// Orient a wired link so packets flow upstream (sensors/TC/hub) → RSU → downstream (OBU/VRU).
 function orientLink(a, b) {
-  const rank = (t) => (t === 'tc' ? 0 : t === 'rsu' ? 1 : 2);
+  const rank = (t) => (isSensor(t) ? 0 : t === 'tc' ? 1 : t === 'hub' ? 2 : t === 'rsu' ? 3 : 4);
   return rank(a.type) <= rank(b.type) ? [a, b] : [b, a];
 }
 
@@ -177,6 +236,11 @@ function linkStreams(a, b, dir, enabled, mapStore) {
   const push = (from, to, m, d) => { if (on(m)) out.push({ from: { x: from.x, y: from.y }, to: { x: to.x, y: to.y }, label: m, color: MSG_COLOR[m], dir: d }); };
   const kind = connKind(a.type, b.type);
 
+  if (kind === 'sensor') {                        // LiDAR/radar/camera → infrastructure
+    const [sen, infra] = isSensor(a.type) ? [a, b] : [b, a];
+    if (showUp) out.push({ from: { x: sen.x, y: sen.y }, to: { x: infra.x, y: infra.y }, label: 'DET', color: MSG_COLOR.DET, dir: 'up' });
+    return out;
+  }
   if (kind === 'signal') {                        // the TC physically drives the light
     const tc = a.type === 'tc' ? a : b, sig = a.type === 'tc' ? b : a;
     if (showDown) out.push({ from: { x: tc.x, y: tc.y }, to: { x: sig.x, y: sig.y }, label: 'phase', color: '#fbbf24', dir: 'ctl' });
@@ -260,6 +324,7 @@ const CONN_DESC = {
   wireless: 'The over-the-air C-V2X / DSRC link. SPaT / MAP / TIM are broadcast to vehicles; BSM / SRM come back from them.',
   v2v: 'Direct vehicle-to-vehicle exchange of BSMs (position, speed, heading, braking) — works with no infrastructure at all.',
   v2p: 'Vehicle-to-pedestrian. The VRU device broadcasts a PSM; in return an RSU can send pedestrian crossing timing (SPaT) and vehicles their BSM, so the phone can warn the pedestrian.',
+  sensor: 'A roadside detection sensor (LiDAR / radar / camera) feeding the infrastructure. It sees the road directly — including UNEQUIPPED users with no OBU or phone — and hands detections to the V2X Hub / controller, which can then generate a V2X message (e.g. a PSM for a detected pedestrian) for the RSU to broadcast.',
   signal: 'Not a direct wire. The controller sends low-voltage logic to a LOAD SWITCH (a solid-state relay) in the cabinet — watched by the conflict monitor (MMU) — which switches field power out through the cabinet terminals, into underground conduit, up the pole/mast arm, to the signal head’s LED modules. It is NOT a radio link, but this indicated state is exactly what the SPaT message reports over the air.',
   generic: 'A generic link between two devices.',
 };
@@ -504,6 +569,45 @@ function DeviceArt({ type, model, sig, rot }) {
           <line x1="0" y1="-170" x2="0" y2="170" strokeDasharray="22 16" className="stroke-yellow-500/70" strokeWidth="3" />
         </g>
       );
+    case 'hub':
+      return (
+        <g>
+          <rect x="-33" y="-26" width="66" height="52" rx="6" className="fill-zinc-800 stroke-neon-cyan" strokeWidth="2" />
+          <rect x="-27" y="-20" width="54" height="9" rx="2" className="fill-cyan-500/20" />
+          <text x="0" y="-13" textAnchor="middle" className="fill-neon-cyan text-[9px] font-bold">V2X HUB</text>
+          {[0, 1, 2, 3].map((i) => <circle key={i} cx={-21 + i * 14} cy={8} r="3.5" className="fill-neon-cyan" />)}
+          <text x="0" y="22" textAnchor="middle" className="fill-slate-500 text-[7px]">edge compute · fusion</text>
+          {tag(label)}
+        </g>
+      );
+    case 'lidar':
+    case 'radar':
+    case 'camera': {
+      const col = type === 'lidar' ? '#38bdf8' : type === 'radar' ? '#a78bfa' : '#34d399';
+      const short = type === 'lidar' ? 'LiDAR' : type === 'radar' ? 'RADAR' : 'CAM';
+      return (
+        <g>
+          <rect x="-19" y="-15" width="38" height="28" rx="5" className="fill-zinc-800" stroke={col} strokeWidth="2" />
+          {type === 'camera'
+            ? <g><rect x="-7" y="-10" width="14" height="16" rx="3" fill="#0b0f17" stroke={col} strokeWidth="1.4" /><circle cx="0" cy="-2" r="4" fill={col} /></g>
+            : type === 'radar'
+              ? [0, 1, 2].map((i) => <path key={i} d={`M -11 6 q 11 ${-(9 + i * 5)} 22 0`} fill="none" stroke={col} strokeWidth="1.6" opacity={0.9 - i * 0.22} />)
+              : [0, 1, 2, 3, 4].map((i) => <line key={i} x1={-13 + i * 6.5} y1="-10" x2={-13 + i * 6.5} y2="7" stroke={col} strokeWidth="1.3" opacity="0.85" />)}
+          <text x="0" y={22} textAnchor="middle" fill={col} className="text-[8px] font-bold">{short}</text>
+          {tag(model ? `${model.vendor} ${model.name}` : short)}
+        </g>
+      );
+    }
+    case 'mast':
+      return (
+        <g>
+          <rect x="98" y="94" width="32" height="12" rx="2" className="fill-zinc-700 stroke-zinc-600" />
+          <line x1="114" y1="100" x2="114" y2="-96" className="stroke-zinc-500" strokeWidth="10" strokeLinecap="round" />
+          <line x1="114" y1="-92" x2="-122" y2="-92" className="stroke-zinc-500" strokeWidth="9" strokeLinecap="round" />
+          {[-104, -52, 8, 64].map((mx, i) => <rect key={i} x={mx - 4} y="-101" width="8" height="16" rx="2" className="fill-zinc-600 stroke-zinc-400" strokeWidth="1" />)}
+          <text x="-4" y="-108" textAnchor="middle" className="fill-slate-500 text-[10px]">pole + mast arm — mount signals &amp; sensors on top</text>
+        </g>
+      );
     default:
       return null;
   }
@@ -549,6 +653,7 @@ function WorldBuilderTab({ openGlossary }) {
   const [dirMode, setDirMode] = useState(prefs.dirMode || 'both'); // 'fwd' | 'rev' | 'both'
   const [enabled, setEnabled] = useState(prefs.enabled || {});     // per-message on/off (missing = on)
   const [mapStore, setMapStore] = useState(prefs.mapStore || 'rsu'); // MAP geometry: 'rsu' | 'tc'
+  const [mapOpen, setMapOpen] = useState(false);                     // MAP-storage detail: collapsed by default
   const [worlds, setWorlds] = useState(loadWorlds);   // saved worlds (localStorage)
   const [activeId, setActiveId] = useState(startWorld ? startWorld.id : null);
   const [worldName, setWorldName] = useState(startWorld ? startWorld.name : '');
@@ -712,15 +817,36 @@ function WorldBuilderTab({ openGlossary }) {
       setWiring({ ...wiring, x: p.x, y: p.y });
     }
   };
+  // Mast geometry (world coords): the arm is a horizontal line the width of the
+  // arm span, at the top of the pole. Signals & sensors "click into" it.
+  const MAST = { armDY: -92, x0: -122, x1: 114 };
+  const snapToMast = (o) => {
+    if (!(o.type === 'signal' || isSensor(o.type))) return null;
+    for (const mst of objects) {
+      if (mst.type !== 'mast' || mst.id === o.id) continue;
+      const armY = mst.y + MAST.armDY, x0 = mst.x + MAST.x0, x1 = mst.x + MAST.x1;
+      if (o.x >= x0 - 12 && o.x <= x1 + 12 && Math.abs(o.y - armY) < 72) {
+        return { x: Math.max(x0, Math.min(x1, o.x)), y: armY + TYPES[o.type].size.h / 2 - 4 };
+      }
+    }
+    return null;
+  };
   const endInteraction = (e) => {
     // a drag that actually moved is one undo step
-    if (drag.current && drag.current.moved) { const pre = drag.current.pre; setUndo((u) => [...u.slice(-49), pre]); setRedo([]); }
+    if (drag.current && drag.current.moved) {
+      const pre = drag.current.pre; setUndo((u) => [...u.slice(-49), pre]); setRedo([]);
+      // snap a dragged signal/sensor onto a nearby mast arm ("click into")
+      const id = drag.current.id;
+      const dragged = objects.find((o) => o.id === id);
+      const snap = dragged && snapToMast(dragged);
+      if (snap) setObjects((prev) => prev.map((o) => o.id === id ? { ...o, x: snap.x, y: snap.y } : o));
+    }
     if (wiring && svgRef.current) {
       const p = svgPoint(svgRef.current, e.clientX, e.clientY);
       // find nearest other device within grab radius
       let best = null, bestD = 70 * 70;
       objects.forEach((o) => {
-        if (o.id === wiring.from || o.type === 'roadH' || o.type === 'roadV') return;
+        if (o.id === wiring.from || TYPES[o.type].cat !== 'device') return;   // only wire to real devices
         const d = (o.x - p.x) ** 2 + (o.y - p.y) ** 2;
         if (d < bestD) { bestD = d; best = o; }
       });
@@ -791,8 +917,9 @@ function WorldBuilderTab({ openGlossary }) {
 
   const paletteGroups = [
     { title: 'Templates', items: ['intersection'] },
-    { title: 'Devices', items: ['tc', 'rsu', 'obu', 'ev', 'bus', 'signal', 'ped'] },
-    { title: 'Scenery', items: ['roadH', 'roadV'] },
+    { title: 'Devices', items: ['tc', 'rsu', 'hub', 'obu', 'ev', 'bus', 'signal', 'ped'] },
+    { title: 'Sensors', items: ['lidar', 'radar', 'camera'] },
+    { title: 'Structures', items: ['roadH', 'roadV', 'mast'] },
   ];
 
   return (
@@ -1092,6 +1219,34 @@ function WorldBuilderTab({ openGlossary }) {
           <p className="mt-1.5 text-[11px] leading-relaxed text-slate-400">
             <span className="text-slate-300">Forward</span>: infrastructure → vehicle (SPaT/MAP/TIM). <span className="text-slate-300">Reverse</span>: vehicle/VRU → infrastructure (BSM/SRM/PSM).
           </p>
+
+          {/* MAP geometry storage — compact, collapsed by default, tucked under Direction */}
+          <div className="mt-2 rounded-lg border border-zinc-800 bg-zinc-900/40">
+            <button onClick={() => setMapOpen((v) => !v)} className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left">
+              <span className="text-slate-500 w-3 text-[11px]">{mapOpen ? '▾' : '▸'}</span>
+              <span className="text-[10px] uppercase tracking-widest text-slate-500">MAP geometry stored on</span>
+              <span className="ml-auto rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-[10px] text-neon-cyan">{mapStore.toUpperCase()}</span>
+            </button>
+            {mapOpen && (
+              <div className="px-2.5 pb-2.5">
+                <Segmented value={mapStore} onChange={setMapStore}
+                  options={[{ value: 'rsu', label: 'RSU' }, { value: 'tc', label: 'TC' }]} />
+                <div className="mt-2 rounded-lg border border-zinc-800 bg-zinc-900/50 p-2.5">
+                  <div className="text-[12px] font-semibold text-slate-200">{MAP_INFO[mapStore].title}</div>
+                  <div className="mt-1 text-[11px] text-emerald-300/90"><span className="font-semibold">✔ </span>{MAP_INFO[mapStore].benefit}</div>
+                  <div className="mt-1 text-[11px] text-amber-300/90"><span className="font-semibold">✖ </span>{MAP_INFO[mapStore].draw}</div>
+                  {(() => { const kb = backhaulKbps(enabled, mapStore); const max = 20; return (
+                    <div className="mt-2">
+                      <div className="flex items-center justify-between text-[11px]"><span className="text-slate-400">Est. cabinet backhaul (downstream)</span><span className="font-mono text-slate-200">≈ {kb} kbps</span></div>
+                      <div className="mt-1 h-2 rounded-full bg-zinc-800 overflow-hidden"><div className="h-full rounded-full transition-all" style={{ width: Math.min(100, (kb / max) * 100) + '%', background: mapStore === 'tc' ? '#fbbf24' : '#34d399' }} /></div>
+                      <div className="mt-1 text-[10px] text-slate-500">SPaT 100 B @ 10 Hz · SSM 60 B @ 2 Hz{mapStore === 'tc' ? ' · MAP 1 KB @ 1 Hz (+8 kbps)' : ' · MAP broadcast locally by RSU (0 on wire)'}</div>
+                    </div>
+                  ); })()}
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="text-[10px] uppercase tracking-widest text-slate-500 mt-3 mb-1.5">SAE J2735 messages</div>
           <div className="flex flex-wrap gap-1.5">
             {ALL_MSGS.map((mm) => {
@@ -1104,23 +1259,6 @@ function WorldBuilderTab({ openGlossary }) {
             })}
           </div>
           <p className="mt-2 text-[11px] text-slate-500">Pick messages, then hit <span className="text-neon-cyan">▶ Simulate this world</span> in the toolbar.</p>
-
-          <div className="text-[10px] uppercase tracking-widest text-slate-500 mt-3 mb-1.5">MAP geometry stored on</div>
-          <Segmented value={mapStore} onChange={setMapStore}
-            options={[{ value: 'rsu', label: 'RSU' }, { value: 'tc', label: 'TC' }]} />
-          <div className="mt-2 rounded-lg border border-zinc-800 bg-zinc-900/50 p-2.5">
-            <div className="text-[12px] font-semibold text-slate-200">{MAP_INFO[mapStore].title}</div>
-            <div className="mt-1 text-[11px] text-emerald-300/90"><span className="font-semibold">✔ </span>{MAP_INFO[mapStore].benefit}</div>
-            <div className="mt-1 text-[11px] text-amber-300/90"><span className="font-semibold">✖ </span>{MAP_INFO[mapStore].draw}</div>
-            {/* quantified backhaul meter */}
-            {(() => { const kb = backhaulKbps(enabled, mapStore); const max = 20; return (
-              <div className="mt-2">
-                <div className="flex items-center justify-between text-[11px]"><span className="text-slate-400">Est. cabinet backhaul (downstream)</span><span className="font-mono text-slate-200">≈ {kb} kbps</span></div>
-                <div className="mt-1 h-2 rounded-full bg-zinc-800 overflow-hidden"><div className="h-full rounded-full transition-all" style={{ width: Math.min(100, (kb / max) * 100) + '%', background: mapStore === 'tc' ? '#fbbf24' : '#34d399' }} /></div>
-                <div className="mt-1 text-[10px] text-slate-500">SPaT 100 B @ 10 Hz · SSM 60 B @ 2 Hz{mapStore === 'tc' ? ' · MAP 1 KB @ 1 Hz (+8 kbps)' : ' · MAP broadcast locally by RSU (0 on wire)'}</div>
-              </div>
-            ); })()}
-          </div>
         </div>
 
         {!sel && <div className="text-sm text-slate-500">Select a device or link to see its properties &amp; spec sheet.</div>}
@@ -1236,7 +1374,7 @@ const G = {
   ewY0: 205, ewY1: 305, nsX0: 400, nsX1: 500,
   ewLaneY: 272, nsLaneX: 452,
   ewStop: 350, nsStop: 340,
-  rsu: { x: 560, y: 150 }, tc: { x: 636, y: 150 },
+  rsu: { x: 560, y: 150 }, tc: { x: 636, y: 150 }, hub: { x: 660, y: 118 },
   ewHead: { x: 356, y: 150 }, nsHead: { x: 520, y: 336 },
   tower: { x: 812, y: 118 }, cloud: { x: 700, y: 66 },
 };
@@ -1340,6 +1478,23 @@ function MiniScene({ frame }) {
     </g>
   ));
 
+  // Roadside detection sensor on a pole, with a detection cone aimed at the road.
+  const sensorMark = (s) => {
+    const col = s.kind === 'lidar' ? '#38bdf8' : s.kind === 'radar' ? '#a78bfa' : '#34d399';
+    const name = s.kind === 'lidar' ? 'LiDAR' : s.kind === 'radar' ? 'RADAR' : 'CAMERA';
+    const y = s.y != null ? s.y : 118;
+    const tx = s.tx != null ? s.tx : s.x;   // point on the road the cone is aimed at
+    return (
+      <g>
+        <line x1={s.x} y1={y + 10} x2={s.x} y2={G.ewY0 - 6} className="stroke-zinc-600" strokeWidth="5" />
+        {s.active && <polygon points={`${s.x},${y + 8} ${tx - 66},${G.ewLaneY + 6} ${tx + 66},${G.ewLaneY + 6}`} fill={col + '22'} stroke={col} strokeWidth="1.5" strokeDasharray="6 4" className={f.waves ? 'dashflow' : ''} />}
+        <rect x={s.x - 21} y={y - 12} width="42" height="24" rx="5" className="fill-zinc-800" stroke={col} strokeWidth="2" />
+        <text x={s.x} y={y + 4} textAnchor="middle" fill={col} className="text-[9px] font-bold">{name}</text>
+        {s.label && <text x={s.x} y={y - 18} textAnchor="middle" fill={col} className="text-[9px]">{s.label}</text>}
+      </g>
+    );
+  };
+
   return (
     <svg viewBox={`0 0 ${MS.w} ${MS.h}`} className="w-full h-full">
       <defs>
@@ -1414,6 +1569,19 @@ function MiniScene({ frame }) {
           <text x={G.rsu.x} y={G.rsu.y + 4} textAnchor="middle" className="fill-neon-green text-[10px] font-bold">RSU</text>
         </g>
       )}
+
+      {/* V2X Hub (edge compute) — fuses sensor detections, feeds the RSU */}
+      {f.hub && (
+        <g>
+          <line x1={G.hub.x} y1={G.hub.y} x2={G.rsu.x + 26} y2={G.rsu.y} className="stroke-pink-400" strokeWidth="2" />
+          <rect x={G.hub.x - 26} y={G.hub.y - 15} width="52" height="30" rx="6" className="fill-cyan-500/15 stroke-neon-cyan" />
+          <text x={G.hub.x} y={G.hub.y - 1} textAnchor="middle" className="fill-neon-cyan text-[9px] font-bold">V2X HUB</text>
+          <text x={G.hub.x} y={G.hub.y + 9} textAnchor="middle" className="fill-slate-400 text-[7px]">fusion</text>
+        </g>
+      )}
+
+      {/* roadside detection sensors */}
+      {f.sensors && f.sensors.map((s, i) => <g key={'sen' + i}>{sensorMark(s)}</g>)}
 
       {/* hazards */}
       {f.hazard && hazardMark(f.hazard)}
@@ -1939,6 +2107,99 @@ const SCENARIOS = [
       return { layout: 'straightH', infra: 'rsu', cars, packets, hazard: { x: 662, kind: 'curve', label: 'CURVE' }, banner, waves: t >= 1.5 && t < 3.2 };
     },
   },
+
+  /* ---------------- roadside sensors (LiDAR / radar / camera) ---------------- */
+  {
+    // Roadside sensors see UNEQUIPPED road users (no OBU/phone). Toggle the
+    // sensor type — each has different strengths and feeds the infrastructure,
+    // which then speaks V2X on the road user's behalf.
+    id: 'sensordet', category: 'V2I', icon: '🛰️', title: 'Roadside Sensor Detection', tagline: 'LiDAR · radar · camera — detecting the unequipped',
+    duration: 9,
+    variants: [
+      {
+        id: 'lidar', label: 'LiDAR · pedestrian', tagline: 'Detects a pedestrian with no device',
+        duration: 9,
+        why: 'A pedestrian with no phone or beacon steps toward the crosswalk — invisible to V2X. A roadside LiDAR detects them in 3-D and feeds the V2X Hub / RSU, which broadcasts a PSM on their behalf. An approaching connected vehicle receives it and yields. This is how infrastructure protects UNEQUIPPED road users.',
+        messages: ['DET', 'PSM'],
+        frame(t) {
+          const cx = 470;
+          const ex = t < 3.6 ? lerp(-40, 300, seg(t, 0, 3.6)) : (t < 5.4 ? lerp(300, 398, easeOut(seg(t, 3.6, 5.4))) : 398);
+          const py = t < 1.6 ? 360 : lerp(360, 250, seg(t, 1.6, 7));
+          const detect = t >= 1.6 && t < 6.4;
+          const cars = [{ id: 'ego', x: ex, y: G.ewLaneY, or: 'h', kind: 'car', label: 'EGO', alert: t >= 3 && t < 5.6 }];
+          const ped = { x: cx, y: py };   // note: no `broadcasting` — the pedestrian has no device
+          const sensors = [{ x: cx, y: 118, kind: 'lidar', tx: cx, active: detect, label: detect ? 'ped detected' : '' }];
+          const packets = []; let banner;
+          if (t < 1.6) banner = { text: 'A pedestrian with NO phone/beacon nears the crosswalk', tone: 'info', sub: 'invisible to V2X on their own' };
+          else if (t < 3) { packets.push({ ...lerpPt({ x: cx, y: 132 }, G.rsu, seg(t, 1.6, 3)), label: 'DET', tone: TONE.cyan }); banner = { text: 'Roadside LiDAR detects them in 3-D → sends the detection to the RSU', tone: 'warn' }; }
+          else if (t < 5.6) { packets.push({ ...lerpPt(G.rsu, { x: ex, y: G.ewLaneY }, ((t - 3) % 1.3) / 1.3), label: 'PSM', tone: TONE.amber }); banner = { text: '⚠ Infrastructure broadcasts a PSM on the pedestrian’s behalf — the car yields', tone: 'warn' }; }
+          else banner = { text: 'The car stopped for a pedestrian neither of them could have announced', tone: 'ok' };
+          return { layout: 'straightH', infra: 'rsu', crosswalk: cx, cars, ped, sensors, packets, banner, waves: detect };
+        },
+      },
+      {
+        id: 'radar', label: 'Radar · speed', tagline: 'Measures approach speed (no loops)',
+        duration: 9,
+        why: 'A roadside radar measures the speed and range of approaching vehicles in any weather — replacing inductive loops. Here it detects a fast vehicle in the “dilemma zone” and feeds the controller, which briefly holds the green so the vehicle clears safely instead of being caught by the yellow.',
+        messages: ['DET'],
+        frame(t) {
+          const vx = lerp(-40, 980, seg(t, 0, 9));
+          const detect = t >= 1.4 && t < 5;
+          const green = t < 6.2;
+          const cars = [{ id: 'v', x: vx, y: G.ewLaneY, or: 'h', kind: 'car', label: 'EGO' }];
+          const sensors = [{ x: 250, y: 118, kind: 'radar', tx: 250, active: detect, label: detect ? '92 km/h' : '' }];
+          const packets = []; let banner;
+          if (t < 1.4) banner = { text: 'A vehicle approaches fast — and there are no inductive loops here', tone: 'info' };
+          else if (t < 3) { packets.push({ ...lerpPt({ x: 250, y: 132 }, G.tc, seg(t, 1.4, 3)), label: 'DET', tone: TONE.cyan }); banner = { text: 'Roadside radar measures its speed & range → feeds the controller', tone: 'info', sub: '≈ 92 km/h · in the dilemma zone' }; }
+          else if (t < 5) banner = { text: 'Controller holds the green a beat — the vehicle clears, not caught by the yellow', tone: 'ok' };
+          else banner = { text: 'Radar-actuated detection — loops replaced, works in fog / rain / night', tone: 'ok' };
+          return { layout: 'cross', infra: 'signals', ew: green ? 'green' : 'red', ns: green ? 'red' : 'green', cars, sensors, packets, banner, waves: detect };
+        },
+      },
+      {
+        id: 'camera', label: 'Camera · video', tagline: 'Classifies & flags violations',
+        duration: 8,
+        why: 'An AI video/thermal camera watches the approach, classifies every road user, and reads events a radar or loop cannot — like red-light running or wrong-way driving. Detections feed the controller and V2X Hub for actuation, counts and safety applications.',
+        messages: ['DET'],
+        frame(t) {
+          const ew = t < 3 ? 'green' : t < 4.2 ? 'yellow' : 'red';
+          const vx = lerp(-40, 900, seg(t, 0, 8));
+          const detect = t >= 3.6;
+          const cars = [{ id: 'r', x: vx, y: G.ewLaneY, or: 'h', kind: 'car', label: 'RLR', alert: t >= 4.2 && t < 6.5 }];
+          const sensors = [{ x: 356, y: 112, kind: 'camera', tx: 356, active: detect, label: detect ? 'violation' : '' }];
+          const packets = []; let banner;
+          if (t < 3.6) banner = { text: 'An AI camera watches the approach & classifies every road user', tone: 'info' };
+          else if (t < 5) { packets.push({ ...lerpPt({ x: 356, y: 128 }, G.tc, seg(t, 3.6, 5)), label: 'DET', tone: TONE.cyan }); banner = { text: '⚠ Camera flags a red-light violation → logs the event & feeds the system', tone: 'warn' }; }
+          else banner = { text: 'Video detection: actuation, turning counts, red-light & wrong-way events', tone: 'ok' };
+          return { layout: 'cross', infra: 'signals', ew, ns: ew === 'green' ? 'red' : 'green', cars, sensors, packets, banner, waves: detect };
+        },
+      },
+    ],
+  },
+  {
+    id: 'hubfusion', category: 'V2I', icon: '🖥️', title: 'Sensor Fusion via V2X Hub', tagline: 'LiDAR + radar + camera → one fused scene',
+    duration: 9,
+    why: 'A V2X Hub (an open-source roadside computing platform) collects detections from every sensor — radar, LiDAR and camera — and fuses them into one consistent picture of the intersection. It then hands a signed message set to the RSU to broadcast. The payoff: even unequipped road users get a “voice” over V2X, from redundant, all-weather sensing.',
+    messages: ['DET', 'PSM'],
+    frame(t) {
+      const ex = t < 4 ? lerp(-40, 300, seg(t, 0, 4)) : (t < 5.5 ? lerp(300, 398, easeOut(seg(t, 4, 5.5))) : 398);
+      const py = t < 2 ? 360 : lerp(360, 250, seg(t, 2, 7.5));
+      const detect = t >= 1.5 && t < 6.6;
+      const cars = [{ id: 'ego', x: ex, y: G.ewLaneY, or: 'h', kind: 'car', label: 'EGO', alert: t >= 3.4 && t < 6 }];
+      const ped = { x: 470, y: py };
+      const sensors = [
+        { x: 250, y: 118, kind: 'radar', tx: 250, active: detect },
+        { x: 470, y: 112, kind: 'lidar', tx: 470, active: detect, label: detect ? 'ped' : '' },
+        { x: 356, y: 122, kind: 'camera', tx: 356, active: detect },
+      ];
+      const packets = []; let banner;
+      if (t < 1.5) banner = { text: 'Three sensors watch the intersection — radar, LiDAR and a camera', tone: 'info' };
+      else if (t < 3.4) { [250, 356, 470].forEach((sx) => packets.push({ ...lerpPt({ x: sx, y: 132 }, G.hub, seg(t, 1.5, 3.4)), label: 'DET', tone: TONE.cyan })); banner = { text: 'Every detection streams into the V2X Hub, which fuses them into one scene', tone: 'info' }; }
+      else if (t < 6) { packets.push({ ...lerpPt(G.rsu, { x: ex, y: G.ewLaneY }, ((t - 3.4) % 1.3) / 1.3), label: 'PSM', tone: TONE.amber }); banner = { text: '⚠ The Hub feeds the RSU a fused message set — the car is warned of the pedestrian', tone: 'warn' }; }
+      else banner = { text: 'Sensor fusion via the V2X Hub — even unequipped road users get a voice', tone: 'ok' };
+      return { layout: 'straightH', infra: 'rsu', hub: true, crosswalk: 470, cars, ped, sensors, packets, banner, waves: detect };
+    },
+  },
   {
     id: 'wzws', category: 'V2P', icon: '🦺', title: 'Work-Zone Worker Safety', tagline: 'A road worker’s PSM warns drivers',
     duration: 9,
@@ -2118,6 +2379,8 @@ const GLOSSARY = [
     { term: 'ADAS', def: 'Advanced Driver-Assistance System — the in-vehicle brain that fuses incoming V2X messages with onboard sensors (radar/camera/lidar) to warn the driver or actuate braking and steering.' },
     { term: 'Vehicle', def: 'The final node containing the central ADAS/CPU processing brain that pulls data from the OBU, coordinates sensor fusion with internal vehicle metrics, and acts on safety logic.' },
     { term: 'VRU (Vulnerable Road User)', def: 'A pedestrian, cyclist, or road worker — a road user with no protective vehicle shell — whose position and presence are shared over V2X via a PSM.' },
+    { term: 'V2X Hub', def: 'A roadside computing platform (the USDOT reference implementation is open-source) that sits between the field devices and the RSU. It runs application plugins that fuse sensor detections (LiDAR/radar/camera), bridge the controller’s NTCIP 1202 to SAE J2735, and generate messages — even a PSM for a pedestrian who has no device — for the RSU to broadcast. It does not transmit over the air itself or control the signal.' },
+    { term: 'Roadside Sensors (LiDAR / Radar / Camera)', def: 'Infrastructure detection sensors mounted on poles/mast arms. Unlike V2X, they see UNEQUIPPED road users (no OBU or phone). LiDAR gives centimetre 3-D position day or night; radar measures speed/range in any weather and replaces inductive loops; AI cameras classify road users and read events like red-light running. Their detections feed the controller / V2X Hub, which can then speak V2X on a road user’s behalf.' },
   ]},
   { group: 'Standards › Communication', icon: '📶', items: [
     { term: 'Ethernet (IEEE 802.3)', def: 'The physical, high-speed wired connection typically used within the intersection cabinet to link the Traffic Controller to the RSU.',
