@@ -71,6 +71,9 @@ eq(m.connKind('lidar', 'hub'), 'sensor', 'lidar-hub = sensor feed');
 eq(m.connKind('camera', 'tc'), 'sensor', 'camera-tc = sensor feed');
 eq(m.connKind('hub', 'rsu'), 'ethernet', 'hub-rsu = backhaul');
 eq(m.connKind('hub', 'tc'), 'ethernet', 'hub-tc = backhaul');
+eq(m.connKind('obu', 'celltower'), 'cellular', 'vehicle-tower = cellular Uu');
+eq(m.connKind('celltower', 'tmc'), 'backhaul', 'tower-TMC = network backhaul');
+eq(m.connKind('tmc', 'rsu'), 'backhaul', 'TMC-RSU = network backhaul');
 
 // ---------- 3. linkStreams (direction, roles, MAP storage) ----------
 console.log('• linkStreams');
@@ -92,6 +95,12 @@ eq(L(m.linkStreams(cam, hub, 'fwd', {}, 'rsu')), [], 'sensor feed is upstream-on
 ok(m.isSensor('lidar') && m.isSensor('radar') && m.isSensor('camera') && !m.isSensor('rsu'), 'isSensor');
 ok(m.MODELS.hub && m.MODELS.lidar && m.MODELS.radar && m.MODELS.camera, 'new devices have vendor spec sheets');
 ok(m.TYPES.hub && m.TYPES.mast && m.TYPES.lidar && m.TYPES.radar && m.TYPES.camera, 'new device types exist');
+// V2N network path: cellular Uu (vehicle↔tower) + backhaul (tower↔TMC↔RSU)
+const tower = { type: 'celltower', x: 0, y: 0 }, tmc = { type: 'tmc', x: 100, y: 0 };
+eq(L(m.linkStreams(car, tower, 'both', {}, 'rsu')), ['BSM', 'TIM'], 'cellular = TIM down + BSM up');
+eq(L(m.linkStreams(tower, tmc, 'both', {}, 'rsu')), ['BSM', 'TIM'], 'backhaul = TIM down + BSM up');
+eq(L(m.linkStreams(tower, car, 'fwd', {}, 'rsu')), ['TIM'], 'cellular downlink = TIM advisory');
+ok(m.TYPES.celltower && m.TYPES.tmc && m.MODELS.celltower && m.MODELS.tmc, 'V2N devices + models exist');
 ok(!m.linkStreams(rsu, car, 'both', { MAP: false }, 'rsu').some((s) => s.label === 'MAP'), 'disabling MAP removes it');
 
 // ---------- 4. decodePacket ----------

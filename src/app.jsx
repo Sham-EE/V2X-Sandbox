@@ -45,14 +45,18 @@ const TYPES = {
   lidar: { label: 'LiDAR Sensor',        cat: 'device', size: { w: 38, h: 34 }, glyph: '🛰️' },
   radar: { label: 'Radar Sensor',        cat: 'device', size: { w: 38, h: 34 }, glyph: '📶' },
   camera:{ label: 'Camera / Video',      cat: 'device', size: { w: 38, h: 34 }, glyph: '📷' },
+  celltower: { label: 'Cell Tower (gNB/eNB)', cat: 'device', size: { w: 56, h: 108 }, glyph: '🗼' },
+  tmc:   { label: 'TMC / Cloud',         cat: 'device', size: { w: 84, h: 58 }, glyph: '☁️' },
   roadH: { label: 'Road — Horizontal',   cat: 'road',   size: { w: 340, h: 108 }, glyph: '↔' },
   roadV: { label: 'Road — Vertical',     cat: 'road',   size: { w: 108, h: 340 }, glyph: '↕' },
-  mast:  { label: 'Pole + Mast Arm',     cat: 'road',   size: { w: 250, h: 210 }, glyph: '🗼' },
+  mast:  { label: 'Pole + Mast Arm',     cat: 'road',   size: { w: 250, h: 210 }, glyph: '🏗️' },
   intersection: { label: '4-Way Intersection', cat: 'template', glyph: '🚦' },
 };
 // Roadside detection sensors — they see the road (incl. UNEQUIPPED users with no
 // OBU/phone) and feed the infrastructure, which then speaks V2X on their behalf.
 const isSensor = (t) => t === 'lidar' || t === 'radar' || t === 'camera';
+// V2N network infrastructure: the cellular tower + the TMC/cloud backend.
+const isNetwork = (t) => t === 'celltower' || t === 'tmc';
 
 const MODELS = {
   tc: [
@@ -178,6 +182,30 @@ const MODELS = {
       can: ['Actuated detection + turning-movement counts', 'Feed a V2X Hub for pedestrian safety apps'],
       cannot: ['Operate blind (needs a usable image)'] },
   ],
+  celltower: [
+    { id: 'gnb-5g', vendor: 'Generic', name: '5G Base Station (gNodeB)', gen: 'Modern',
+      tagline: 'A cellular base station — the on-ramp from the vehicle to the mobile network.',
+      specs: { Interface: 'Uu (network air link)', Radio: '4G LTE / 5G NR · C-V2X Uu', Backhaul: 'Fiber / IP to the core', Coverage: 'Kilometres (wide area)', Latency: 'Higher than direct 5.9 GHz' },
+      can: ['Carry V2N traffic between vehicles and the cloud/TMC', 'Reach far beyond line-of-sight (wide-area)', 'Deliver TIM advisories pushed by the TMC'],
+      cannot: ['Replace direct V2V/V2I 5.9 GHz for split-second safety', 'Work if there is no cellular coverage / the network is congested'] },
+    { id: 'enb-lte', vendor: 'Generic', name: 'LTE eNodeB', gen: 'Modern',
+      tagline: '4G LTE base station used for cellular V2N connectivity.',
+      specs: { Interface: 'Uu (network air link)', Radio: '4G LTE', Backhaul: 'Fiber / microwave', Coverage: 'Wide area', Role: 'Vehicle ↔ mobile core' },
+      can: ['Backhaul probe data (BSM/telematics) to the cloud', 'Relay network-sourced advisories to vehicles'],
+      cannot: ['Guarantee low latency under load'] },
+  ],
+  tmc: [
+    { id: 'tmc-atms', vendor: 'Generic', name: 'Traffic Management Center', gen: 'Cloud',
+      tagline: 'The agency backend (ATMS/cloud) that aggregates data and pushes advisories.',
+      specs: { Role: 'Aggregate + advise', Inputs: 'Probe data, sensors, CAD/511 feeds', Outputs: 'TIM (work-zone/weather/incident)', Reach: 'Region-wide', Path: 'Internet ↔ cell tower ↔ vehicle' },
+      can: ['Fuse data from many vehicles & sources region-wide', 'Publish TIM advisories over the cellular network', 'Feed RSUs and hubs over the backhaul network'],
+      cannot: ['Talk to a vehicle without a network path (cell tower / RSU)', 'React in milliseconds — it is wide-area, not split-second'] },
+    { id: 'cloud-v2x', vendor: 'Generic', name: 'Cloud V2X Platform', gen: 'Cloud',
+      tagline: 'A cloud service that ingests connected-vehicle data and serves advisories.',
+      specs: { Role: 'Ingest + serve', Inputs: 'C-V2X Uu, telematics APIs', Outputs: 'TIM / advisories', Hosting: 'Cloud / data center' },
+      can: ['Scale to many vehicles & jurisdictions', 'Host analytics on aggregated probe data'],
+      cannot: ['Provide local, low-latency safety alerts on its own'] },
+  ],
   signal: [
     { id: 'sig-3', vendor: 'Generic', name: '3-Section Head', gen: '—',
       tagline: 'Standard red / yellow / green ball head.', specs: { Sections: '3 (R,Y,G)', Control: 'One signal group' },
@@ -197,6 +225,9 @@ const canRequestPriority = (t) => t === 'ev' || t === 'bus';   // authorized to 
 function connKind(a, b) {
   const s = new Set([a, b]);
   if (isSensor(a) || isSensor(b)) return 'sensor';                 // LiDAR/radar/camera detection feed
+  // V2N — the cellular / cloud path
+  if (s.has('celltower') && (isVehicle(a) || isVehicle(b))) return 'cellular';  // Uu air interface (vehicle ↔ tower)
+  if (isNetwork(a) || isNetwork(b)) return 'backhaul';            // tower ↔ TMC/cloud, TMC ↔ RSU/hub (fiber/IP)
   if (s.has('tc') && s.has('rsu')) return 'ethernet';
   if (s.has('hub') && (s.has('tc') || s.has('rsu'))) return 'ethernet';  // V2X Hub backhaul
   if (s.has('ped')) return 'v2p';
@@ -212,6 +243,8 @@ const CONN_STYLE = {
   v2p:      { color: '#fbbf24', dash: '3 7', label: 'V2P · PSM' },
   signal:   { color: '#64748b', dash: '0', label: 'Signal control' },
   sensor:   { color: '#38bdf8', dash: '2 5', label: 'Sensor · detections' },
+  cellular: { color: '#fb923c', dash: '3 7', label: 'Cellular Uu · C-V2X/5G' },
+  backhaul: { color: '#94a3b8', dash: '0', label: 'Network backhaul · fiber/IP' },
   generic:  { color: '#64748b', dash: '4 6', label: 'link' },
 };
 
@@ -239,6 +272,19 @@ function linkStreams(a, b, dir, enabled, mapStore) {
   if (kind === 'sensor') {                        // LiDAR/radar/camera → infrastructure
     const [sen, infra] = isSensor(a.type) ? [a, b] : [b, a];
     if (showUp) out.push({ from: { x: sen.x, y: sen.y }, to: { x: infra.x, y: infra.y }, label: 'DET', color: MSG_COLOR.DET, dir: 'up' });
+    return out;
+  }
+  if (kind === 'cellular') {                       // V2N Uu air interface: vehicle ↔ cell tower
+    const veh = isVehicle(a.type) ? a : b, tower = isVehicle(a.type) ? b : a;
+    if (showDown) push(tower, veh, 'TIM', 'down');   // network pushes advisories down
+    if (showUp) push(veh, tower, 'BSM', 'up');       // vehicle sends probe/telematics up
+    return out;
+  }
+  if (kind === 'backhaul') {                        // V2N wired/fiber: TMC ↔ tower ↔ RSU/hub
+    const rank = (t) => (t === 'tmc' ? 0 : t === 'celltower' ? 1 : 2);   // TMC/cloud is most upstream
+    const [s, d] = rank(a.type) <= rank(b.type) ? [a, b] : [b, a];
+    if (showDown) push(s, d, 'TIM', 'down');         // advisories flow out toward the edge
+    if (showUp) push(d, s, 'BSM', 'up');             // aggregated probe data flows back to the cloud
     return out;
   }
   if (kind === 'signal') {                        // the TC physically drives the light
@@ -325,6 +371,8 @@ const CONN_DESC = {
   v2v: 'Direct vehicle-to-vehicle exchange of BSMs (position, speed, heading, braking) — works with no infrastructure at all.',
   v2p: 'Vehicle-to-pedestrian. The VRU device broadcasts a PSM; in return an RSU can send pedestrian crossing timing (SPaT) and vehicles their BSM, so the phone can warn the pedestrian.',
   sensor: 'A roadside detection sensor (LiDAR / radar / camera) feeding the infrastructure. It sees the road directly — including UNEQUIPPED users with no OBU or phone — and hands detections to the V2X Hub / controller, which can then generate a V2X message (e.g. a PSM for a detected pedestrian) for the RSU to broadcast.',
+  cellular: 'V2N over the cellular network (the “Uu” air interface). The vehicle’s cellular modem talks to a cell tower (4G eNodeB / 5G gNodeB) — not the 5.9 GHz safety radio. The vehicle sends probe data up; the network pushes advisories (TIM) down. Wide-area reach, but higher latency than direct V2V/V2I, so it’s used for information, not split-second safety.',
+  backhaul: 'The wired/fiber network path behind the air interface: cell tower ↔ mobile core ↔ internet ↔ the Traffic Management Center (TMC) / cloud (and the TMC can also reach RSUs and hubs this way). This is how vehicle data reaches the cloud and how region-wide advisories get published back out.',
   signal: 'Not a direct wire. The controller sends low-voltage logic to a LOAD SWITCH (a solid-state relay) in the cabinet — watched by the conflict monitor (MMU) — which switches field power out through the cabinet terminals, into underground conduit, up the pole/mast arm, to the signal head’s LED modules. It is NOT a radio link, but this indicated state is exactly what the SPaT message reports over the air.',
   generic: 'A generic link between two devices.',
 };
@@ -463,7 +511,7 @@ function svgPoint(svg, cx, cy) {
 }
 
 // --- centered SVG artwork for each device/road type ---
-function DeviceArt({ type, model, sig, rot }) {
+function DeviceArt({ type, model, sig, rot, flip }) {
   const label = model ? `${model.vendor} ${model.name}` : TYPES[type].label;
   const spin = (body) => <g transform={`rotate(${rot || 0})`}>{body}</g>;   // rotate the body, keep the label upright
   const tag = (t) => <text y={TYPES[type].size.h / 2 + 16} textAnchor="middle" className="fill-slate-400 text-[10px]">{t}</text>;
@@ -598,14 +646,47 @@ function DeviceArt({ type, model, sig, rot }) {
         </g>
       );
     }
-    case 'mast':
+    case 'mast': {
+      const s = flip ? -1 : 1;   // flip mirrors the arm to the other side of the pole
       return (
         <g>
-          <rect x="98" y="94" width="32" height="12" rx="2" className="fill-zinc-700 stroke-zinc-600" />
-          <line x1="114" y1="100" x2="114" y2="-96" className="stroke-zinc-500" strokeWidth="10" strokeLinecap="round" />
-          <line x1="114" y1="-92" x2="-122" y2="-92" className="stroke-zinc-500" strokeWidth="9" strokeLinecap="round" />
-          {[-104, -52, 8, 64].map((mx, i) => <rect key={i} x={mx - 4} y="-101" width="8" height="16" rx="2" className="fill-zinc-600 stroke-zinc-400" strokeWidth="1" />)}
-          <text x="-4" y="-108" textAnchor="middle" className="fill-slate-500 text-[10px]">pole + mast arm — mount signals &amp; sensors on top</text>
+          <rect x={s > 0 ? 98 : -130} y="94" width="32" height="12" rx="2" className="fill-zinc-700 stroke-zinc-600" />
+          <line x1={114 * s} y1="100" x2={114 * s} y2="-96" className="stroke-zinc-500" strokeWidth="10" strokeLinecap="round" />
+          <line x1={114 * s} y1="-92" x2={-122 * s} y2="-92" className="stroke-zinc-500" strokeWidth="9" strokeLinecap="round" />
+          {[-104, -52, 8, 64].map((mx, i) => <rect key={i} x={mx * s - 4} y="-101" width="8" height="16" rx="2" className="fill-zinc-600 stroke-zinc-400" strokeWidth="1" />)}
+          <text x="0" y="-108" textAnchor="middle" className="fill-slate-500 text-[10px]">pole + mast arm — mount signals, sensors &amp; RSU</text>
+        </g>
+      );
+    }
+    case 'celltower':
+      return (
+        <g>
+          {/* lattice tower */}
+          <line x1="-16" y1="52" x2="0" y2="-40" className="stroke-zinc-400" strokeWidth="3" />
+          <line x1="16" y1="52" x2="0" y2="-40" className="stroke-zinc-400" strokeWidth="3" />
+          {[0, 1, 2, 3].map((k) => <line key={k} x1={-13 + k * 3} y1={40 - k * 22} x2={13 - k * 3} y2={40 - k * 22} className="stroke-zinc-500" strokeWidth="2" />)}
+          <line x1="0" y1="-40" x2="0" y2="-54" className="stroke-zinc-300" strokeWidth="2" />
+          {/* antenna panels */}
+          <rect x="-13" y="-42" width="6" height="14" rx="1" className="fill-neon-amber" />
+          <rect x="7" y="-42" width="6" height="14" rx="1" className="fill-neon-amber" />
+          {/* radiating signal */}
+          {[0, 1, 2].map((k) => <path key={k} d={`M ${-8 - k * 5} -50 a ${8 + k * 5} ${8 + k * 5} 0 0 1 ${16 + k * 10} 0`} fill="none" stroke="#fb923c" strokeWidth="1.6" opacity={0.85 - k * 0.22} />)}
+          <text x="0" y="30" textAnchor="middle" className="fill-orange-300 text-[9px] font-bold">CELL</text>
+          <text y={TYPES.celltower.size.h / 2 + 16} textAnchor="middle" className="fill-slate-400 text-[10px]">{model ? `${model.vendor} ${model.name}` : 'Cell Tower'}</text>
+        </g>
+      );
+    case 'tmc':
+      return (
+        <g>
+          {/* cloud */}
+          <g className="fill-zinc-700 stroke-zinc-500" strokeWidth="1.5">
+            <ellipse cx="-20" cy="4" rx="20" ry="15" />
+            <ellipse cx="14" cy="4" rx="22" ry="17" />
+            <ellipse cx="-2" cy="-10" rx="20" ry="16" />
+            <rect x="-38" y="2" width="74" height="18" rx="9" />
+          </g>
+          <text x="-2" y="2" textAnchor="middle" className="fill-neon-cyan text-[10px] font-bold">TMC · Cloud</text>
+          <text y={TYPES.tmc.size.h / 2 + 16} textAnchor="middle" className="fill-slate-400 text-[10px]">{model ? `${model.vendor} ${model.name}` : 'TMC / Cloud'}</text>
         </g>
       );
     default:
@@ -817,16 +898,28 @@ function WorldBuilderTab({ openGlossary }) {
       setWiring({ ...wiring, x: p.x, y: p.y });
     }
   };
-  // Mast geometry (world coords): the arm is a horizontal line the width of the
-  // arm span, at the top of the pole. Signals & sensors "click into" it.
-  const MAST = { armDY: -92, x0: -122, x1: 114 };
+  // Mast geometry (world coords), honoring the arm's flip. The arm is a
+  // horizontal line at the top of the pole; the pole sits at one end of it.
+  const mastGeo = (mst) => {
+    const s = mst.flip ? -1 : 1;
+    const armY = mst.y - 92;
+    const poleX = mst.x + 114 * s;
+    const ends = [mst.x + 114 * s, mst.x - 122 * s];
+    return { armY, poleX, x0: Math.min(...ends), x1: Math.max(...ends) };
+  };
+  // Signals & sensors "click into" the arm; an RSU attaches to the pole side.
   const snapToMast = (o) => {
-    if (!(o.type === 'signal' || isSensor(o.type))) return null;
+    const onArm = o.type === 'signal' || isSensor(o.type);
+    if (!onArm && o.type !== 'rsu') return null;
     for (const mst of objects) {
       if (mst.type !== 'mast' || mst.id === o.id) continue;
-      const armY = mst.y + MAST.armDY, x0 = mst.x + MAST.x0, x1 = mst.x + MAST.x1;
-      if (o.x >= x0 - 12 && o.x <= x1 + 12 && Math.abs(o.y - armY) < 72) {
-        return { x: Math.max(x0, Math.min(x1, o.x)), y: armY + TYPES[o.type].size.h / 2 - 4 };
+      const g = mastGeo(mst);
+      if (onArm && o.x >= g.x0 - 12 && o.x <= g.x1 + 12 && Math.abs(o.y - g.armY) < 72) {
+        return { x: Math.max(g.x0, g.x1 === g.x0 ? g.x0 : Math.min(g.x1, o.x)), y: g.armY + TYPES[o.type].size.h / 2 - 4 };
+      }
+      if (o.type === 'rsu' && Math.abs(o.x - g.poleX) < 46 && o.y > g.armY - 8 && o.y < mst.y + 70) {
+        const side = mst.flip ? 1 : -1;   // mount on the arm-facing side of the pole
+        return { x: g.poleX + 20 * side, y: g.armY + 40 };
       }
     }
     return null;
@@ -919,6 +1012,7 @@ function WorldBuilderTab({ openGlossary }) {
     { title: 'Templates', items: ['intersection'] },
     { title: 'Devices', items: ['tc', 'rsu', 'hub', 'obu', 'ev', 'bus', 'signal', 'ped'] },
     { title: 'Sensors', items: ['lidar', 'radar', 'camera'] },
+    { title: 'Network (V2N)', items: ['celltower', 'tmc'] },
     { title: 'Structures', items: ['roadH', 'roadV', 'mast'] },
   ];
 
@@ -1025,7 +1119,7 @@ function WorldBuilderTab({ openGlossary }) {
               <g key={o.id} transform={`translate(${o.x},${o.y})`} style={{ cursor: 'move' }}
                  className={sel?.id === o.id ? 'part-hi' : ''}
                  onPointerDown={(e) => startDrag(o, e)}>
-                <DeviceArt type={o.type} />
+                <DeviceArt type={o.type} flip={o.flip} />
                 <rect x={-TYPES[o.type].size.w / 2} y={-TYPES[o.type].size.h / 2} width={TYPES[o.type].size.w} height={TYPES[o.type].size.h}
                   fill="transparent" stroke={sel?.id === o.id ? '#22d3ee' : 'transparent'} strokeDasharray="6 5" strokeWidth="1.5" />
               </g>
@@ -1330,6 +1424,18 @@ function WorldBuilderTab({ openGlossary }) {
                   })}
                 </div>
                 <p className="mt-1.5 text-[11px] text-slate-500">{selObj.type === 'ped' ? 'A walking pedestrian broadcasts a PSM; links to any RSU form/break as they pass through range.' : 'A driving vehicle loops across the canvas during simulation — links to any RSU form/break as it passes through range.'}</p>
+              </div>
+            )}
+
+            {/* Mast arm — flip which side the arm extends, and where the RSU mounts */}
+            {selObj.type === 'mast' && (
+              <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
+                <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-1.5">Mast arm</div>
+                <button onClick={() => { pushUndo(); setObjects((prev) => prev.map((o) => o.id === selObj.id ? { ...o, flip: !o.flip } : o)); }}
+                  className="w-full rounded-md border border-zinc-700 bg-zinc-900/70 px-3 py-2 text-[13px] text-slate-200 hover:border-zinc-500">
+                  ⟲ Flip arm — currently extends {selObj.flip ? 'right ▶' : '◀ left'}
+                </button>
+                <p className="mt-1.5 text-[11px] text-slate-500">Drag a signal or sensor onto the arm to mount it; drag an RSU near the pole to attach it to the side (where they usually go).</p>
               </div>
             )}
 
@@ -2381,6 +2487,8 @@ const GLOSSARY = [
     { term: 'VRU (Vulnerable Road User)', def: 'A pedestrian, cyclist, or road worker — a road user with no protective vehicle shell — whose position and presence are shared over V2X via a PSM.' },
     { term: 'V2X Hub', def: 'A roadside computing platform (the USDOT reference implementation is open-source) that sits between the field devices and the RSU. It runs application plugins that fuse sensor detections (LiDAR/radar/camera), bridge the controller’s NTCIP 1202 to SAE J2735, and generate messages — even a PSM for a pedestrian who has no device — for the RSU to broadcast. It does not transmit over the air itself or control the signal.' },
     { term: 'Roadside Sensors (LiDAR / Radar / Camera)', def: 'Infrastructure detection sensors mounted on poles/mast arms. Unlike V2X, they see UNEQUIPPED road users (no OBU or phone). LiDAR gives centimetre 3-D position day or night; radar measures speed/range in any weather and replaces inductive loops; AI cameras classify road users and read events like red-light running. Their detections feed the controller / V2X Hub, which can then speak V2X on a road user’s behalf.' },
+    { term: 'Cell Tower (gNodeB / eNodeB)', def: 'The cellular base station that carries V2N (Vehicle-to-Network) traffic. A vehicle’s cellular modem reaches it over the “Uu” network air interface (4G LTE eNodeB / 5G gNodeB) — this is the mobile network, NOT the 5.9 GHz safety radio used for direct V2V/V2I. The tower backhauls over fiber/IP to the mobile core and out to the internet. Wide-area reach, but higher latency, so V2N carries information (advisories), not split-second safety.' },
+    { term: 'TMC / Cloud (V2N backend)', def: 'The Traffic Management Center or cloud platform — the agency backend that connected vehicles reach over the cellular network. It aggregates probe data and feeds from many sources (511, incident/CAD systems, sensors) and publishes advisories back out as TIM messages (work zones, weather, incidents), region-wide. It reaches vehicles via the path: TMC ↔ internet ↔ cell tower ↔ vehicle (and can also feed RSUs/hubs over the backhaul).' },
   ]},
   { group: 'Standards › Communication', icon: '📶', items: [
     { term: 'Ethernet (IEEE 802.3)', def: 'The physical, high-speed wired connection typically used within the intersection cabinet to link the Traffic Controller to the RSU.',
@@ -2433,6 +2541,16 @@ PHY: SC-FDMA @ 5.9 GHz, sub-channelized
           └─ IEEE 1609.2 secured payload
                 └─ SAE J2735 MessageFrame
 Direct device-to-device — no cellular tower required.` },
+    { term: 'Cellular Uu (V2N)', def: 'The “Uu” interface is the normal cellular network link between a device and a base station — as opposed to PC5, which is the direct device-to-device sidelink. V2N uses Uu: the vehicle talks through a cell tower (eNodeB/gNodeB) to the mobile core and the cloud/TMC. It reaches far beyond line of sight but has higher, variable latency, so it carries advisories (TIM) and probe data, not split-second safety warnings.',
+      format: `V2N over cellular — the Uu path
+Vehicle (cellular modem)
+  └─ Uu air interface (4G LTE / 5G NR)
+       └─ Cell tower (eNodeB / gNodeB)
+            └─ Mobile core (EPC / 5GC)
+                 └─ Internet / IP backhaul
+                      └─ TMC / Cloud (application server)
+Downlink: TIM advisories · Uplink: BSM/probe data
+Contrast: PC5 sidelink = direct, no tower (V2V/V2I).` },
   ]},
   { group: 'Standards › Messages', icon: '📨', items: [
     { term: 'NTCIP 1202', def: 'The National Transportation Communications for ITS Protocol standard regulating how traffic signal controllers store and transmit signal phase and timing data over wired networks.',
