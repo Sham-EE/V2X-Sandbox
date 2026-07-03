@@ -26,9 +26,28 @@ is inlined into that one file.
 - **Test Your Knowledge** — a shuffled, scored multiple-choice quiz.
 - **Device Anatomy** — annotated cutaways: wire up a real traffic-controller
   cabinet (Controller → load switch → field terminal → conduit up the pole to the
-  signal head, which energizes when wired correctly) and explore the RSU internals.
+  signal head, which energizes when wired correctly) and explore the **RSU** and
+  **OBU** internals part by part (the two ends of the same over-the-air link).
 - **Glossary** — a searchable dictionary with a Definition / **Format** toggle
-  showing the real wire/message layouts.
+  showing the real wire/message layouts, plus a **References & Further Reading**
+  section linking to the authoritative standards bodies (USDOT ITS JPO, SAE, IEEE,
+  NTCIP, FHWA, NHTSA).
+
+A dismissible **intro tour** greets first-time visitors (re-openable via the `?`
+in the header; shown once, tracked in `localStorage`).
+
+### Deep links & sharing
+
+The URL hash reflects where you are, so any view is shareable:
+
+```
+#cases/priority/transit     a specific Use Case scenario + variant
+#anatomy/obu                a specific Device Anatomy cutaway
+#glossary/BSM%20(...)       a specific glossary term
+#world=<encoded>            a World Builder world (via its "🔗 Share" button)
+```
+
+Paste one of these onto the deployed URL and it opens straight to that view.
 
 ## Architecture
 

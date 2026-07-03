@@ -2011,17 +2011,21 @@ function ScenarioPlayer({ scn }) {
   );
 }
 
-function UseCasesTab({ openGlossary }) {
-  const [id, setId] = useState(SCENARIOS[0].id);
+function UseCasesTab({ openGlossary, sub, navigate }) {
   const [open, setOpen] = useState({});   // all categories collapsed by default
-  const [variantId, setVariantId] = useState(null);
+  // scenario + variant are driven by the deep-link route ('cases/<id>/<variant>')
+  const parts = (sub || '').split('/');
+  const id = SCENARIOS.some((s) => s.id === parts[0]) ? parts[0] : SCENARIOS[0].id;
   const scn = SCENARIOS.find((s) => s.id === id);
   const cat = CATEGORIES.find((c) => c.id === scn.category);
-  // reset to the first variant whenever the scenario changes
-  useEffect(() => { setVariantId(scn.variants ? scn.variants[0].id : null); }, [id]);
-  const variant = scn.variants ? (scn.variants.find((v) => v.id === variantId) || scn.variants[0]) : null;
+  const variantId = scn.variants ? (scn.variants.some((v) => v.id === parts[1]) ? parts[1] : scn.variants[0].id) : null;
+  const variant = scn.variants ? scn.variants.find((v) => v.id === variantId) : null;
   // effective scenario: base scenario with the active variant's frame/why/messages/tagline
   const eff = variant ? { ...scn, ...variant } : scn;
+  const selectScn = (nid) => { const s = SCENARIOS.find((x) => x.id === nid); navigate('cases/' + nid + (s.variants ? '/' + s.variants[0].id : '')); };
+  const selectVar = (vid) => navigate('cases/' + id + '/' + vid);
+  // reveal a deep-linked scenario by opening its category
+  useEffect(() => { if (sub) setOpen((o) => ({ ...o, [scn.category]: true })); }, [id]);   // eslint-disable-line
   return (
     <div className="flex h-full min-h-0">
       {/* scenario list, grouped by communication category */}
@@ -2043,7 +2047,7 @@ function UseCasesTab({ openGlossary }) {
               {isOpen && (
                 <div className="mt-1.5 space-y-1.5 pl-1">
                   {items.map((s) => (
-                    <button key={s.id} onClick={() => setId(s.id)}
+                    <button key={s.id} onClick={() => selectScn(s.id)}
                       className={'w-full rounded-lg border p-2.5 text-left transition ' +
                         (id === s.id ? 'border-neon-cyan bg-neon-cyan/10' : 'border-zinc-800 bg-zinc-900/40 hover:border-zinc-600')}>
                       <div className="flex items-center gap-2"><span className="text-base">{s.icon}</span><span className="text-[12px] font-semibold text-slate-100">{s.title}</span></div>
@@ -2062,7 +2066,7 @@ function UseCasesTab({ openGlossary }) {
         {scn.variants && (
           <div className="px-4 pt-4">
             <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-1">Perspective</div>
-            <Segmented value={variant.id} onChange={setVariantId}
+            <Segmented value={variant.id} onChange={selectVar}
               options={scn.variants.map((v) => ({ value: v.id, label: v.label }))} />
           </div>
         )}
@@ -2089,7 +2093,7 @@ function UseCasesTab({ openGlossary }) {
           </div>
         </div>
         <div className="mt-6 rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-[11px] text-slate-400 leading-relaxed">
-          <span className="text-slate-300 font-semibold">{cat.label}</span> — {cat.desc}. More could be added per category (transit signal priority, curve-speed & wrong-way warnings, cooperative merge, platooning…).
+          <span className="text-slate-300 font-semibold">{cat.label}</span> — {cat.desc}. Tip: every scenario (and variant) is deep-linkable — the URL updates as you browse, so you can share a link straight to this animation.
         </div>
       </div>
     </div>
@@ -2312,19 +2316,40 @@ Public structure (IEEE); certificates issued by the SCMS.` },
     { term: 'RSU → Vehicle', def: 'The wireless over-the-air data pipeline where SPaT and MAP messages are packaged, cryptographically wrapped via IEEE 1609.2 security standards, and broadcasted over radio waves.' },
     { term: 'End-to-End Data Flow', def: "The complete loop where a traffic cabinet change is generated, encoded, cryptographically signed, wirelessly broadcasted, received by an OBU, and passed through a vehicle's sensor fusion algorithm to protect human life." },
   ]},
+  // Links point to authoritative homepages (stable), not deep paths that rot.
+  // The exact standards text (SAE J2735, NTCIP 1202) is copyrighted/paywalled —
+  // these are where to obtain or read about it, consistent with the app's
+  // "representative, not verbatim" stance on those message layouts.
+  { group: 'References & Further Reading', icon: '🔗', items: [
+    { term: 'USDOT ITS JPO', def: 'The U.S. DOT Intelligent Transportation Systems Joint Program Office — connected-vehicle research, deployment guidance and the CV Pilot program. A good starting point for V2X in the U.S.',
+      links: [{ label: 'its.dot.gov', url: 'https://www.its.dot.gov/' }] },
+    { term: 'SAE J2735 (message set)', def: 'SAE International’s DSRC Message Set Dictionary — the authoritative definition of BSM, SPaT, MAP, SRM/SSM, TIM and PSM. The standard itself is paywalled; search “J2735” on the SAE site.',
+      links: [{ label: 'sae.org — standards', url: 'https://www.sae.org/standards/' }] },
+    { term: 'IEEE 1609 (WAVE & security)', def: 'The IEEE 1609 family defines the WAVE protocol stack; 1609.2 specifies the message security (certificates, ECDSA signing) that underpins trust in every V2X frame.',
+      links: [{ label: 'standards.ieee.org', url: 'https://standards.ieee.org/' }] },
+    { term: 'NTCIP 1202 (signal controllers)', def: 'The NTCIP object definitions for actuated signal controllers — how the cabinet stores and streams phase & timing data. Published jointly by NEMA, AASHTO and ITE.',
+      links: [{ label: 'ntcip.org', url: 'https://www.ntcip.org/' }] },
+    { term: 'FHWA — signals & CV', def: 'U.S. Federal Highway Administration resources on traffic-signal operations and connected-vehicle applications at intersections.',
+      links: [{ label: 'highways.dot.gov', url: 'https://highways.dot.gov/' }] },
+    { term: 'NHTSA — V2X safety', def: 'The U.S. National Highway Traffic Safety Administration’s work on vehicle-to-everything communications and their crash-avoidance safety benefits.',
+      links: [{ label: 'nhtsa.gov', url: 'https://www.nhtsa.gov/' }] },
+  ]},
 ];
 
-function GlossaryTab({ target }) {
+function findGlossaryItem(term) { for (const g of GLOSSARY) { const it = g.items.find((i) => i.term === term); if (it) return it; } return null; }
+function GlossaryTab({ sub, navigate }) {
   const [q, setQ] = useState('');
   const [openGroups, setOpenGroups] = useState(() => GLOSSARY.map((g) => g.group));
-  const [selected, setSelected] = useState(GLOSSARY[0].items[0]);
+  const [selected, setSelected] = useState(() => (sub && findGlossaryItem(decodeURIComponent(sub))) || GLOSSARY[0].items[0]);
   const [view, setView] = useState('def');   // 'def' | 'format'
   useEffect(() => { setView('def'); }, [selected]);   // reset toggle when the term changes
-  // jump to a term when cross-linked from another tab
+  // follow deep links / cross-links from other tabs ('glossary/<term>')
   useEffect(() => {
-    if (!target) return;
-    for (const g of GLOSSARY) { const it = g.items.find((i) => i.term === target.term); if (it) { setSelected(it); setQ(''); return; } }
-  }, [target]);
+    if (!sub) return;
+    const it = findGlossaryItem(decodeURIComponent(sub));
+    if (it) { setSelected(it); setQ(''); }
+  }, [sub]);
+  const choose = (it) => { setSelected(it); if (navigate) navigate('glossary/' + encodeURIComponent(it.term)); };
   const ql = q.trim().toLowerCase();
   const match = (it) => !ql || it.term.toLowerCase().includes(ql) || it.def.toLowerCase().includes(ql);
   const toggleGroup = (g) => setOpenGroups((prev) => (prev.includes(g) ? prev.filter((x) => x !== g) : [...prev, g]));
@@ -2350,7 +2375,7 @@ function GlossaryTab({ target }) {
                 {open && (
                   <div className="ml-4 border-l border-zinc-800 pl-2">
                     {items.map((it) => (
-                      <button key={it.term} onClick={() => setSelected(it)}
+                      <button key={it.term} onClick={() => choose(it)}
                         className={'w-full truncate rounded-md px-2 py-1.5 text-left text-[13px] transition ' +
                           (selected?.term === it.term ? 'bg-neon-cyan/15 text-neon-cyan' : 'text-slate-300 hover:bg-zinc-900')}>
                         {it.child ? '└ ' : ''}{it.term}
@@ -2380,6 +2405,17 @@ function GlossaryTab({ target }) {
 
             {(!selected.format || view === 'def') && (
               <p className="mt-4 text-[15px] leading-relaxed text-slate-300">{selected.def}</p>
+            )}
+
+            {selected.links && (
+              <div className="mt-5">
+                <div className="text-[11px] uppercase tracking-widest text-slate-500 mb-2">Sources &amp; further reading</div>
+                <ul className="space-y-1.5">
+                  {selected.links.map((l) => (
+                    <li key={l.url}><a href={l.url} target="_blank" rel="noopener noreferrer" className="text-[13px] text-neon-cyan hover:underline">{l.label} ↗</a></li>
+                  ))}
+                </ul>
+              </div>
             )}
 
             {selected.format && view === 'format' && (
@@ -2591,12 +2627,54 @@ function RsuDiagram() {
   );
 }
 
-function AnatomyTab() {
-  const [device, setDevice] = useState('cabinet');
+// Annotated (non-wiring) internals of an On-Board Unit — the vehicle's V2X brain.
+const OBU_PARTS = [
+  { id: 'ant', x: 70, y: 118, w: 150, h: 42, name: 'V2X antenna (5.9 GHz)', blurb: 'Usually roof- or mirror-mounted. Feeds the C-V2X / DSRC radio so the vehicle can broadcast its BSM and hear SPaT, MAP, TIM and PSM from the RSU and nearby vehicles.' },
+  { id: 'radio', x: 240, y: 96, w: 150, h: 42, name: 'C-V2X / DSRC radio', blurb: 'The 5.9 GHz modem — the OBU’s link to the outside world. Broadcasts the Basic Safety Message ~10×/second and continuously receives everything in range.' },
+  { id: 'gnss', x: 240, y: 146, w: 150, h: 42, name: 'GNSS receiver', blurb: 'High-precision position and time. Every BSM is stamped with where/when the vehicle is, and it lets the ADAS place received vehicles correctly on the map.' },
+  { id: 'hsm', x: 70, y: 196, w: 150, h: 44, name: 'Security module (HSM)', blurb: 'Signs every outgoing BSM and verifies incoming frames per IEEE 1609.2 using short-lived SCMS pseudonym certificates — trust without revealing the driver’s identity.' },
+  { id: 'cpu', x: 240, y: 196, w: 150, h: 44, name: 'Processor / ADAS', blurb: 'Fuses received V2X messages with onboard radar/camera/lidar, runs the safety apps (FCW, EEBL, IMA, GLOSA…) and decides when to warn the driver or actuate the brakes.' },
+  { id: 'can', x: 70, y: 256, w: 320, h: 40, name: 'Vehicle bus (CAN) interface', blurb: 'Ties into the in-vehicle network: reads speed / brake / steering state to build the BSM, and pushes warnings or braking commands back out to the vehicle.' },
+];
+function ObuDiagram() {
+  const [sel, setSel] = useState(null);
+  const p = sel ? OBU_PARTS.find((x) => x.id === sel) : null;
+  return (
+    <div className="flex-1 min-w-0 flex">
+      <div className="flex-1 min-w-0 p-4">
+        <div className="h-full rounded-xl border border-zinc-800 bg-zinc-950/40 overflow-hidden">
+          <svg viewBox="0 0 480 360" className="w-full h-full" onClick={() => setSel(null)}>
+            <text x="60" y="40" className="fill-slate-200 text-[14px] font-semibold">On-Board Unit — inside the vehicle</text>
+            {/* roof antenna */}
+            <line x1="150" y1="96" x2="140" y2="52" className="stroke-neon-cyan" strokeWidth="2" /><circle cx="140" cy="50" r="3" className="fill-neon-cyan" />
+            <text x="120" y="44" className="fill-slate-500 text-[10px]">roof antenna</text>
+            <rect x="52" y="64" width="376" height="248" rx="10" className="fill-zinc-900 stroke-neon-cyan" strokeWidth="2" />
+            {OBU_PARTS.map((r) => { const on = sel === r.id; return (
+              <g key={r.id} className="cursor-pointer" onClick={(e) => { e.stopPropagation(); setSel(r.id); }}>
+                <rect x={r.x} y={r.y} width={r.w} height={r.h} rx="5" className={(on ? 'stroke-neon-cyan ' : 'stroke-zinc-600 ') + 'fill-zinc-800'} strokeWidth={on ? 2.5 : 1.4} />
+                <text x={r.x + r.w / 2} y={r.y + r.h / 2 + 4} textAnchor="middle" className="fill-slate-200 text-[10px] font-medium">{r.name}</text>
+              </g>
+            ); })}
+          </svg>
+        </div>
+      </div>
+      <div className="w-80 shrink-0 border-l border-zinc-800 bg-zinc-950/60 p-4 overflow-auto">
+        {p ? (
+          <div><div className="text-[10px] uppercase tracking-widest text-neon-cyan mb-1">Component</div><h3 className="text-base font-bold text-slate-100">{p.name}</h3><p className="mt-2 text-[13px] leading-relaxed text-slate-300">{p.blurb}</p></div>
+        ) : <div className="text-sm text-slate-500">Click any block inside the OBU to see what it does. The OBU is the vehicle end of the same link the RSU serves from the roadside.</div>}
+      </div>
+    </div>
+  );
+}
+
+function AnatomyTab({ sub, navigate }) {
   const DEVICES = [
     { id: 'cabinet', icon: '🗄️', name: 'Traffic Controller Cabinet', sub: 'Wire it up · Controller → Load Switch → head' },
     { id: 'rsu', icon: '📡', name: 'Roadside Unit (RSU)', sub: 'Annotated internals' },
+    { id: 'obu', icon: '🚗', name: 'On-Board Unit (OBU)', sub: 'Annotated internals · the vehicle end' },
   ];
+  const device = DEVICES.some((d) => d.id === sub) ? sub : 'cabinet';
+  const setDevice = (id) => navigate('anatomy/' + id);
   return (
     <div className="flex h-full min-h-0">
       <div className="w-64 shrink-0 border-r border-zinc-800 bg-zinc-950/60 p-3 overflow-auto">
@@ -2609,9 +2687,9 @@ function AnatomyTab() {
             <div className="mt-1 text-[11px] text-slate-400">{d.sub}</div>
           </button>
         ))}
-        <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-[11px] text-slate-400 leading-relaxed">More devices (OBU, the full mast-arm assembly) can be added here as the section grows.</div>
+        <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-[11px] text-slate-400 leading-relaxed">The RSU (roadside) and OBU (vehicle) are the two ends of the same over-the-air link — compare their internals side by side.</div>
       </div>
-      {device === 'cabinet' ? <CabinetDiagram /> : <RsuDiagram />}
+      {device === 'cabinet' ? <CabinetDiagram /> : device === 'rsu' ? <RsuDiagram /> : <ObuDiagram />}
     </div>
   );
 }
@@ -2717,13 +2795,77 @@ const TABS = [
   { id: 'glossary', label: 'V2X Definitions Glossary', icon: '📖' },
 ];
 
+// A one-time orientation shown on the first visit (dismissible; re-openable via
+// the "?" in the header). Stored in localStorage so it appears only once.
+const INTRO_STEPS = [
+  { icon: '🛠️', title: 'World Builder', body: 'Drag devices onto the canvas, wire them port-to-port, pick real vendor models, then press Simulate to watch SAE J2735 packets flow. Save, share a link, or export the world.' },
+  { icon: '🎬', title: 'Use Cases', body: 'Animated V2X scenarios grouped by V2I / V2V / V2P / V2N with a scrub timeline. Related ones share a variant toggle. Every scenario is deep-linkable.' },
+  { icon: '🎯', title: 'Test Your Knowledge', body: 'A shuffled, scored quiz spanning messages, roles, security and cabinet anatomy.' },
+  { icon: '🔩', title: 'Device Anatomy', body: 'Wire up a real traffic-controller cabinet, and explore the RSU and OBU internals part by part.' },
+  { icon: '📖', title: 'Glossary', body: 'Every term with a Definition / Format toggle showing the real wire layouts — plus sources for further reading.' },
+];
+function FirstRun({ onClose }) {
+  const [i, setI] = useState(0);
+  const step = INTRO_STEPS[i];
+  const last = i === INTRO_STEPS.length - 1;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" onClick={onClose}>
+      <div className="w-full max-w-lg rounded-2xl border border-zinc-700 bg-zinc-950 p-7 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="text-[11px] uppercase tracking-widest text-neon-cyan">Welcome to V2X Sandbox</div>
+        <h2 className="mt-1 text-xl font-bold text-slate-100">Build · Simulate · Learn how vehicles talk to everything</h2>
+        <p className="mt-2 text-[13px] text-slate-400">A hands-on, fully-offline tool for connected-vehicle infrastructure. Five tabs — here’s the tour:</p>
+        <div className="mt-5 flex items-start gap-3 rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
+          <span className="text-3xl">{step.icon}</span>
+          <div><div className="text-sm font-semibold text-slate-100">{step.title}</div><div className="mt-1 text-[13px] leading-relaxed text-slate-300">{step.body}</div></div>
+        </div>
+        <div className="mt-5 flex items-center justify-between">
+          <div className="flex gap-1.5">{INTRO_STEPS.map((_, k) => (<span key={k} className={'h-1.5 rounded-full transition-all ' + (k === i ? 'w-5 bg-neon-cyan' : 'w-1.5 bg-zinc-700')} />))}</div>
+          <div className="flex gap-2">
+            <button onClick={onClose} className="rounded-lg px-3 py-2 text-[13px] text-slate-400 hover:text-white">Skip</button>
+            <button onClick={() => (last ? onClose() : setI(i + 1))} className="rounded-lg bg-neon-cyan px-4 py-2 text-[13px] font-semibold text-zinc-950 hover:brightness-110 glow-cyan">{last ? 'Start exploring →' : 'Next'}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function App() {
-  const [tab, setTab] = useState(() => lsGet('v2x_tab', 'builder'));
-  const [glossaryTarget, setGlossaryTarget] = useState(null);
-  useEffect(() => { lsSet('v2x_tab', tab); }, [tab]);
-  const openGlossary = (term) => { setGlossaryTarget({ term, k: Date.now() }); setTab('glossary'); };
+  const readHash = () => (window.location.hash || '').replace(/^#/, '');
+  // The route IS the URL hash (path-style, e.g. 'cases/priority/transit'). The
+  // World Builder keeps its own '#world=<encoded>' share hash, which we treat as
+  // the builder tab. This makes tabs, scenarios, variants, anatomy devices and
+  // glossary terms all deep-linkable / shareable.
+  const [route, setRoute] = useState(() => readHash() || lsGet('v2x_tab', 'builder'));
+  const [showIntro, setShowIntro] = useState(() => !lsGet('v2x_seen_intro', false) && !readHash());
+
+  const firstSeg = route.split('/')[0];
+  const tabId = firstSeg.indexOf('world=') === 0 ? 'builder' : firstSeg;
+  const tab = TABS.some((t) => t.id === tabId) ? tabId : 'builder';
+  const sub = route.indexOf('/') < 0 ? '' : route.slice(route.indexOf('/') + 1);
+  const navigate = (r) => setRoute(r);
+  const setTab = (id) => setRoute(id);
+  const openGlossary = (term) => setRoute('glossary/' + encodeURIComponent(term));
+
+  // route → URL hash (replaceState so scenario clicks don't spam history) + persist tab
+  useEffect(() => {
+    const target = '#' + route;
+    if (window.location.hash !== target) {
+      try { window.history.replaceState(null, '', target); } catch (e) { window.location.hash = route; }
+    }
+    lsSet('v2x_tab', tab);
+  }, [route, tab]);
+  // respond to back/forward + manually pasted URLs
+  useEffect(() => {
+    const onHash = () => setRoute(readHash());
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+  const closeIntro = () => { setShowIntro(false); lsSet('v2x_seen_intro', true); };
+
   return (
     <div className="h-screen flex flex-col bg-zinc-950">
+      {showIntro && <FirstRun onClose={closeIntro} />}
       <header className="shrink-0 border-b border-zinc-800 bg-zinc-950/80 backdrop-blur">
         <div className="flex items-center gap-4 px-5 py-3">
           <div className="flex items-center gap-2">
@@ -2742,14 +2884,16 @@ function App() {
               </button>
             ))}
           </nav>
+          <button onClick={() => setShowIntro(true)} title="Show the intro tour"
+            className="ml-auto shrink-0 rounded-full border border-zinc-700 h-8 w-8 text-slate-400 hover:text-white hover:border-zinc-500">?</button>
         </div>
       </header>
       <main className="flex-1 min-h-0">
         {tab === 'builder' && <WorldBuilderTab openGlossary={openGlossary} />}
-        {tab === 'cases' && <UseCasesTab openGlossary={openGlossary} />}
+        {tab === 'cases' && <UseCasesTab openGlossary={openGlossary} sub={sub} navigate={navigate} />}
         {tab === 'quiz' && <QuizTab />}
-        {tab === 'anatomy' && <AnatomyTab />}
-        {tab === 'glossary' && <GlossaryTab target={glossaryTarget} />}
+        {tab === 'anatomy' && <AnatomyTab sub={sub} navigate={navigate} />}
+        {tab === 'glossary' && <GlossaryTab sub={sub} navigate={navigate} />}
       </main>
     </div>
   );

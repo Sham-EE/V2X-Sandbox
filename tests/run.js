@@ -25,9 +25,9 @@ const renders = (el, msg) => { try { RS.renderToStaticMarkup(el); pass++; } catc
 function loadApp() {
   const jsx = fs.readFileSync(path.join(ROOT, 'src/app.jsx'), 'utf8').replace(/ReactDOM\.createRoot[\s\S]*$/, '');
   const code = Babel.transform(jsx, { presets: ['react'] }).code;
-  const names = 'App,WorldBuilderTab,UseCasesTab,GlossaryTab,AnatomyTab,CabinetDiagram,RsuDiagram,QuizTab,MiniScene,SCENARIOS,QUIZ,GLOSSARY,linkStreams,decodePacket,liveXY,connKind,isVehicle,canRequestPriority,backhaulKbps,glossaryTermFor,validCabPair';
+  const names = 'App,WorldBuilderTab,UseCasesTab,GlossaryTab,AnatomyTab,CabinetDiagram,RsuDiagram,ObuDiagram,FirstRun,QuizTab,MiniScene,SCENARIOS,QUIZ,GLOSSARY,linkStreams,decodePacket,liveXY,connKind,isVehicle,canRequestPriority,backhaulKbps,glossaryTermFor,validCabPair,findGlossaryItem';
   const factory = new Function('React', 'ReactDOM', 'window', 'document', 'performance', 'requestAnimationFrame', 'cancelAnimationFrame', 'localStorage', code + `\n;return {${names}};`);
-  const win = { innerWidth: 1440, addEventListener() {}, removeEventListener() {}, location: { href: 'file:///x', hash: '' } };
+  const win = { innerWidth: 1440, addEventListener() {}, removeEventListener() {}, location: { href: 'file:///x', hash: '' }, history: { replaceState() {} } };
   const ls = { getItem: () => null, setItem() {}, removeItem() {} };
   const doc = { getElementById: () => ({}), createElement: () => ({}), createElementNS: () => ({}) };
   return factory(React, { createRoot: () => ({ render() {} }) }, win, doc, { now: () => 0 }, () => 0, () => {}, ls);
@@ -38,14 +38,20 @@ const el = (C, p) => React.createElement(C, p);
 
 // ---------- 1. every tab server-renders ----------
 console.log('• tabs render');
+const noop = () => {};
 renders(el(m.App), 'App');
-renders(el(m.WorldBuilderTab, { openGlossary() {} }), 'WorldBuilderTab');
-renders(el(m.UseCasesTab, { openGlossary() {} }), 'UseCasesTab');
+renders(el(m.FirstRun, { onClose: noop }), 'FirstRun');
+renders(el(m.WorldBuilderTab, { openGlossary: noop }), 'WorldBuilderTab');
+renders(el(m.UseCasesTab, { openGlossary: noop, sub: '', navigate: noop }), 'UseCasesTab');
+renders(el(m.UseCasesTab, { openGlossary: noop, sub: 'priority/transit', navigate: noop }), 'UseCasesTab(deep-link)');
 renders(el(m.QuizTab), 'QuizTab');
-renders(el(m.AnatomyTab), 'AnatomyTab');
+renders(el(m.AnatomyTab, { sub: '', navigate: noop }), 'AnatomyTab');
+renders(el(m.AnatomyTab, { sub: 'obu', navigate: noop }), 'AnatomyTab(obu)');
 renders(el(m.CabinetDiagram), 'CabinetDiagram');
 renders(el(m.RsuDiagram), 'RsuDiagram');
-renders(el(m.GlossaryTab, { target: { term: 'SPaT (Signal Phase and Timing)', k: 1 } }), 'GlossaryTab(target)');
+renders(el(m.ObuDiagram), 'ObuDiagram');
+renders(el(m.GlossaryTab, { sub: '', navigate: noop }), 'GlossaryTab');
+renders(el(m.GlossaryTab, { sub: encodeURIComponent('SPaT (Signal Phase and Timing)'), navigate: noop }), 'GlossaryTab(deep-link)');
 
 // ---------- 2. connKind ----------
 console.log('• connKind');
@@ -97,6 +103,12 @@ eq(m.glossaryTermFor('BSM'), 'BSM (Basic Safety Message)', 'BSM → glossary ter
 eq(m.glossaryTermFor('FCW'), 'FCW', 'FCW → glossary term');
 eq(m.glossaryTermFor('CACC'), 'CACC / Platooning', 'CACC → prefix match');
 eq(m.glossaryTermFor('Maneuver'), null, 'unknown → null');
+// deep-link lookup + sources section
+ok(m.findGlossaryItem('BSM (Basic Safety Message)') != null, 'findGlossaryItem resolves a real term');
+ok(m.findGlossaryItem('nope-not-a-term') == null, 'findGlossaryItem returns null for unknown');
+const refGroup = m.GLOSSARY.find((g) => /References/i.test(g.group));
+ok(refGroup && refGroup.items.length >= 4, 'glossary has a References & Further Reading group');
+ok(refGroup && refGroup.items.every((it) => Array.isArray(it.links) && it.links.every((l) => l.label && /^https:\/\//.test(l.url))), 'every reference has https links with labels');
 
 // ---------- 7. vehicle roles + cabinet wiring ----------
 console.log('• roles + cabinet wiring');
@@ -131,10 +143,17 @@ ok(html.length > 0, 'index.html exists (run `node build.js`)');
 if (html) {
   ok(!html.includes('cdn.tailwindcss.com'), 'no Tailwind CDN');
   ok(!html.includes('unpkg') && !html.includes('text/babel'), 'no unpkg / in-browser Babel');
-  // the offline guarantee: nothing is *loaded* from the network (string URLs in
-  // React's error messages are fine — they are never fetched).
-  ok(!/(?:src|href)\s*=\s*["']https?:/i.test(html), 'no external <script>/<link>/<img> resources');
+  // the offline guarantee: nothing is *loaded* from the network. Resource-loading
+  // attributes (src=, <link href>, @import) must never point at http(s). Plain
+  // <a href> navigation links (the glossary sources) are fine — a click opens a
+  // new tab; nothing is fetched to render the page. String URLs inside React's
+  // error messages are likewise never fetched.
+  ok(!/\ssrc\s*=\s*["']https?:/i.test(html), 'no external src= resources (scripts/images/iframes)');
+  ok(!/<link\b[^>]*\shref\s*=\s*["']https?:/i.test(html), 'no external stylesheet <link>');
   ok(!/@import\s+url\(\s*["']?https?:/i.test(html), 'no external CSS @import');
+  // sanity: the glossary source links ARE bundled (as JS-form anchor hrefs —
+  // React.createElement("a", { href: "https://…" }) — which never auto-load).
+  ok(html.includes('https://www.its.dot.gov'), 'glossary source links are present in the bundle');
   ok(html.includes("ReactDOM.createRoot(document.getElementById('root'))"), 'mounts React');
 }
 
