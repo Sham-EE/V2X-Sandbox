@@ -97,12 +97,12 @@ eq(L(m.linkStreams(cam, hub, 'both', {}, 'rsu')), ['video'], 'camera → hub = v
 eq(L(m.linkStreams({ type: 'lidar', x: 0, y: 0 }, hub, 'both', {}, 'rsu')), ['point cloud'], 'LiDAR → hub = point-cloud feed');
 eq(L(m.linkStreams({ type: 'radar', x: 0, y: 0 }, hub, 'both', {}, 'rsu')), ['tracks'], 'radar → hub = tracks feed');
 eq(L(m.linkStreams(cam, hub, 'fwd', {}, 'rsu')), [], 'sensor feed is upstream-only (no fwd)');
-// sensor → road user = a DETECTION (data flows target → sensor, not to the vehicle)
+// sensor → road user = DETECTION: no transmitted message at all (the vehicle
+// sends nothing; the sensor senses it with its own tech, shown as a reticle)
 {
   const car2 = { type: 'obu', x: 200, y: 0 }, lidar2 = { type: 'lidar', x: 0, y: 0 };
-  const det = m.linkStreams(lidar2, car2, 'both', {}, 'rsu');
-  eq(L(det), ['detection'], 'sensor-car link = a detection');
-  ok(det[0].from.x === car2.x && det[0].to.x === lidar2.x, 'detection flows target → sensor (into the sensor)');
+  eq(L(m.linkStreams(lidar2, car2, 'both', {}, 'rsu')), [], 'a detection carries NO packet (nothing is transmitted)');
+  ok(/transmits nothing|un-?equipped|own tech/i.test(m.decodePacket('detection', {}).acquisition), 'detection decode makes clear the vehicle transmits nothing');
 }
 // each message now has its own hue — no two share a color
 ok(m.ALL_MSGS.every((k) => typeof m.MSG_COLOR[k] === 'string'), 'every message has a color');

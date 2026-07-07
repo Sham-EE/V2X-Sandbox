@@ -291,12 +291,10 @@ function linkStreams(a, b, dir, enabled, mapStore, ctx) {
   const kind = connKind(a.type, b.type);
 
   if (kind === 'detect') {                        // a sensor observing a specific road user
-    const [sen, target] = isSensor(a.type) ? [a, b] : [b, a];
-    // the sensor SENSES the target — information about it flows target → sensor
-    // (a reflection/return for radar/LiDAR, pixels for a camera). Not a link the
-    // vehicle receives anything on.
-    if (showUp) out.push({ from: { x: target.x, y: target.y }, to: { x: sen.x, y: sen.y }, label: 'detection', color: MSG_COLOR.detection, dir: 'up' });
-    return out;
+    // NOT a message on a wire — the vehicle transmits nothing. The sensor senses
+    // the target with its own tech (radar/LiDAR emit-and-listen, camera sees).
+    // Rendered as a scanning lock-on reticle on the target, not a packet.
+    return out;   // no stream
   }
   if (kind === 'sensor') {                        // LiDAR/radar/camera → infrastructure
     const [sen, infra] = isSensor(a.type) ? [a, b] : [b, a];
@@ -402,7 +400,7 @@ function decodePacket(msg, ctx) {
     tracks: { messageId: 'radar tracks', kind: 'proprietary sensor feed (not OTA)', sensor: 'radar (mmWave)', stage: 'PROCESSED object layer (built on the radar point cloud)', tracker: 'GTRACK / Kalman clusterer', trackList: [{ id: 3, range_m: 82, speed_mps: 25.6, azimuth_deg: -4, class: 'vehicle' }, { id: 5, range_m: 140, speed_mps: 13.1, azimuth_deg: 2, class: 'vehicle' }], velocity: 'measured DIRECTLY from Doppler', weather: 'all-weather' },
     video: { messageId: 'camera video / detections', kind: 'proprietary sensor feed (not OTA)', sensor: 'AI video / thermal', capture: 'frames (images) @ 30 fps', frame: '1920×1080', encoding: 'H.264/H.265 when streamed', perFrameAI: { boxes: [{ class: 'pedestrian', conf: 0.94 }, { class: 'vehicle', conf: 0.98 }], events: ['red-light-running'] }, transmitted: 'detection metadata per frame (raw video → TMC for humans, not the safety msg)' },
     objects: { messageId: 'detected objects', kind: 'proprietary sensor feed (not OTA)', from: 'LiDAR / radar / camera', list: [{ id: 17, class: 'pedestrian', x_m: 2.4, y_m: -8.1, v_mps: 1.3 }, { id: 21, class: 'vehicle', v_mps: 12.8 }], note: 'fused by the V2X Hub → broadcast as an SDSM' },
-    detection: { messageId: 'sensor detection (single object)', kind: 'what the sensor extracted about THIS road user', direction: 'target → sensor (the sensor observes it; the target receives nothing)', object: { class: 'vehicle', x_m: 3.1, y_m: -12.4, speed_mps: 12.8, heading_deg: 271, confidence: 0.97 }, note: 'equipped or not, the sensor sees it; wire the sensor to a Hub and this becomes one object in the fused SDSM' },
+    detection: { messageId: 'sensor detection (single object)', kind: 'what the sensor computed about THIS road user', acquisition: 'the sensor senses it with its OWN tech (radar/LiDAR emit-and-listen, or a camera’s pixels) — the vehicle transmits nothing', object: { class: 'vehicle', x_m: 3.1, y_m: -12.4, speed_mps: 12.8, heading_deg: 271, confidence: 0.97 }, note: 'equipped or not, the sensor sees it; wire the sensor to a Hub and this becomes one object in the fused SDSM' },
     phase: { control: 'NTCIP 1202 phase/timing (not a J2735 radio message)', phase: 2, state: 'GREEN', greenTime_s: 12 },
     data: { note: 'generic link payload' },
   }[msg] || { messageId: msg };
@@ -472,7 +470,7 @@ const CONN_DESC = {
   v2v: 'Direct vehicle-to-vehicle exchange of BSMs (position, speed, heading, braking) — works with no infrastructure at all.',
   v2p: 'Vehicle-to-pedestrian. The VRU device broadcasts a PSM; in return an RSU can send pedestrian crossing timing (SPaT) and vehicles their BSM, so the phone can warn the pedestrian.',
   sensor: 'A roadside detection sensor (LiDAR / radar / camera) feeding the infrastructure. It sees the road directly — including UNEQUIPPED users with no OBU or phone — and hands detections to the V2X Hub / controller, which can then generate a V2X message (e.g. a PSM for a detected pedestrian) for the RSU to broadcast.',
-  detect: 'This sensor is DETECTING this road user — it is NOT sending data to the vehicle. Information flows the other way: the sensor observes the target’s position, speed and class (a radar/LiDAR return, or camera pixels), whether or not that vehicle is V2X-equipped. On its own it just senses; wire the sensor onward to a V2X Hub / controller and this detection becomes one object in the fused scene the Hub broadcasts as an SDSM to other vehicles.',
+  detect: 'This sensor is DETECTING this road user with its OWN technology (radar/LiDAR emit a signal and listen for the return; a camera just sees pixels). Nothing is transmitted by the vehicle — it can be completely un-equipped. The sensor computes the target’s position, speed and class on its own. On its own it just senses (shown as a scanning lock-on); wire the sensor onward to a V2X Hub / controller and this detection becomes one object in the fused scene the Hub broadcasts as an SDSM to OTHER vehicles.',
   cellular: 'V2N over the cellular network (the “Uu” air interface). The vehicle’s cellular modem talks to a cell tower (4G eNodeB / 5G gNodeB) — not the 5.9 GHz safety radio. The vehicle sends probe data up; the network pushes advisories (TIM) down. Wide-area reach, but higher latency than direct V2V/V2I, so it’s used for information, not split-second safety.',
   backhaul: 'The wired/fiber network path behind the air interface: cell tower ↔ mobile core ↔ internet ↔ the Traffic Management Center (TMC) / cloud (and the TMC can also reach RSUs and hubs this way). This is how vehicle data reaches the cloud and how region-wide advisories get published back out.',
   signal: 'Not a direct wire. The controller sends low-voltage logic to a LOAD SWITCH (a solid-state relay) in the cabinet — watched by the conflict monitor (MMU) — which switches field power out through the cabinet terminals, into underground conduit, up the pole/mast arm, to the signal head’s LED modules. It is NOT a radio link, but this indicated state is exactly what the SPaT message reports over the air.',
@@ -1348,6 +1346,22 @@ function WorldBuilderTab({ openGlossary }) {
             {/* ---- "Simulate this world": packets flowing across every wired link ---- */}
             {sim && (
               <g>
+                {/* sensor→target = DETECTION: a scanning lock-on reticle on the target
+                    (the sensor senses it; the vehicle transmits nothing). Clickable. */}
+                {conns.map((c) => {
+                  const A = byId[c.from], B = byId[c.to];
+                  if (!A || !B || connKind(A.type, B.type) !== 'detect') return null;
+                  const sen = isSensor(A.type) ? A : B, target = isSensor(A.type) ? B : A;
+                  const tp = lp(target), sz = TYPES[target.type].size;
+                  const open = () => setPacketInspect({ msg: 'detection', secure: true, formatOk: true, fault: null, aType: sen.type, bType: target.type, vehType: isVehicle(target.type) ? target.type : null });
+                  return (
+                    <g key={'det' + c.id} style={{ cursor: 'pointer' }} onPointerDown={(e) => { e.stopPropagation(); open(); }}>
+                      <rect x={tp.x - sz.w / 2 - 7} y={tp.y - sz.h / 2 - 7} width={sz.w + 14} height={sz.h + 14} rx="7"
+                        fill="none" stroke="#7dd3fc" strokeWidth="2" strokeDasharray="7 5" className={paused ? '' : 'dashflow'} />
+                      <text x={tp.x} y={tp.y - sz.h / 2 - 13} textAnchor="middle" className="fill-sky-300 text-[10px] font-semibold">{sen.type} · detecting</text>
+                    </g>
+                  );
+                })}
                 {devices.filter((o) => o.type === 'rsu').map((o) => (
                   <g key={o.id + 'rsu'} style={{ pointerEvents: 'none' }}>
                     {[0, 1].map((k) => <circle key={k} cx={o.x} cy={o.y} r={22 + k * 16} fill="none" stroke="#a78bfa" strokeWidth="2" opacity="0.5" className={paused ? '' : 'radiowave'} style={{ animationDelay: k * 0.4 + 's' }} />)}
