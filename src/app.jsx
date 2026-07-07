@@ -249,8 +249,8 @@ const CONN_STYLE = {
 };
 
 // SAE J2735 messages the user can fine-tune, and their packet colors.
-const ALL_MSGS = ['SPaT', 'MAP', 'TIM', 'SSM', 'BSM', 'SRM', 'PSM'];
-const MSG_COLOR = { SPaT: '#22d3ee', MAP: '#22d3ee', TIM: '#a78bfa', SSM: '#34d399', BSM: '#34d399', SRM: '#fbbf24', PSM: '#fbbf24', DET: '#38bdf8', data: '#64748b' };
+const ALL_MSGS = ['SPaT', 'MAP', 'TIM', 'SSM', 'BSM', 'SRM', 'PSM', 'SDSM'];
+const MSG_COLOR = { SPaT: '#22d3ee', MAP: '#22d3ee', TIM: '#a78bfa', SSM: '#34d399', BSM: '#34d399', SRM: '#fbbf24', PSM: '#fbbf24', SDSM: '#38bdf8', objects: '#7dd3fc', data: '#64748b' };
 
 // Orient a wired link so packets flow upstream (sensors/TC/hub) → RSU → downstream (OBU/VRU).
 function orientLink(a, b) {
@@ -261,7 +261,13 @@ function orientLink(a, b) {
 // Packet streams for one link, honoring the direction mode and enabled messages.
 // dir: 'fwd' = infrastructure→vehicle · 'rev' = vehicle→infrastructure · 'both'.
 // Returns [{ from:{x,y}, to:{x,y}, label, color }].
-function linkStreams(a, b, dir, enabled, mapStore) {
+// `ctx` describes what the world provides, so only messages that make sense are
+// generated: { signal, sensor, priority, network }. SPaT/MAP/SSM need a signal
+// controller; SDSM needs a sensor feed; SRM/SSM need an authorized (EV/bus)
+// requester; TIM needs a network (TMC/cell) source. Defaults to a full
+// signalized intersection so callers that don't pass ctx keep old behavior.
+function linkStreams(a, b, dir, enabled, mapStore, ctx) {
+  const c = ctx || { signal: true, sensor: false, priority: true, network: true };
   const on = (m) => enabled[m] !== false;
   const showDown = dir === 'fwd' || dir === 'both';
   const showUp = dir === 'rev' || dir === 'both';
@@ -271,7 +277,9 @@ function linkStreams(a, b, dir, enabled, mapStore) {
 
   if (kind === 'sensor') {                        // LiDAR/radar/camera → infrastructure
     const [sen, infra] = isSensor(a.type) ? [a, b] : [b, a];
-    if (showUp) out.push({ from: { x: sen.x, y: sen.y }, to: { x: infra.x, y: infra.y }, label: 'DET', color: MSG_COLOR.DET, dir: 'up' });
+    // a proprietary detected-object feed (not an OTA J2735 message) — the Hub/TC
+    // fuses these and generates an SDSM for the RSU to broadcast.
+    if (showUp) out.push({ from: { x: sen.x, y: sen.y }, to: { x: infra.x, y: infra.y }, label: 'objects', color: MSG_COLOR.objects, dir: 'up' });
     return out;
   }
   if (kind === 'cellular') {                       // V2N Uu air interface: vehicle ↔ cell tower
@@ -306,24 +314,31 @@ function linkStreams(a, b, dir, enabled, mapStore) {
     if (showDown) out.push({ from: { x: a.x, y: a.y }, to: { x: b.x, y: b.y }, label: 'data', color: MSG_COLOR.data, dir: 'down' });
     return out;
   }
-  // ethernet / wireless — real bidirectional V2I traffic.
-  // MAP rides the cabinet wire only when it is stored on the TC; the RSU always
-  // broadcasts MAP over the air (whether held locally or relaying the TC's copy).
+  // ethernet / wireless — real bidirectional V2I traffic, but only the messages
+  // the world can actually justify (see ctx). SPaT/MAP/SSM require a signal;
+  // SDSM requires a sensor feed; TIM requires a network source.
+  const wireless = kind === 'wireless';
   const [s, d] = orientLink(a, b);
-  const down = kind === 'wireless'
-    ? ['SPaT', 'MAP', 'TIM', 'SSM']
-    : (mapStore === 'tc' ? ['SPaT', 'MAP', 'SSM'] : ['SPaT', 'SSM']);
-  // Upstream: every vehicle sends BSM, but only an authorized role (emergency /
-  // transit) sends an SRM the controller will grant. A passenger car sends BSM only.
+  const down = [];
+  if (c.signal) down.push('SPaT');
+  // MAP (intersection geometry): broadcast over the air whenever there's a
+  // signal; on the cabinet wire only when MAP is stored on the TC.
+  if (c.signal && (wireless || mapStore === 'tc')) down.push('MAP');
+  if (c.sensor) down.push('SDSM');                 // fused sensor detections
+  if (c.network) down.push('TIM');                 // network-sourced advisories
+  if (c.signal && c.priority) down.push('SSM');     // signal-status reply (only if priority can be requested)
+  // Upstream: every vehicle sends BSM. An SRM only exists when there's a signal
+  // to request priority from AND an authorized (EV/bus) requester.
   const veh = d;   // downstream endpoint = the vehicle on a wireless link
-  const up = kind === 'wireless' && !canRequestPriority(veh.type) ? ['BSM'] : ['BSM', 'SRM'];
+  const up = ['BSM'];
+  if (c.signal && c.priority && (!wireless || canRequestPriority(veh.type))) up.push('SRM');
   if (showDown) down.forEach((m) => push(s, d, m, 'down'));
   if (showUp) up.forEach((m) => push(d, s, m, 'up'));
   return out;
 }
 
 // Representative message sizes/rates — used for the backhaul bandwidth meter.
-const MSG_SPEC = { SPaT: { bytes: 100, hz: 10 }, MAP: { bytes: 1000, hz: 1 }, TIM: { bytes: 300, hz: 1 }, SSM: { bytes: 60, hz: 2 }, BSM: { bytes: 300, hz: 10 }, SRM: { bytes: 80, hz: 2 }, PSM: { bytes: 200, hz: 5 } };
+const MSG_SPEC = { SPaT: { bytes: 100, hz: 10 }, MAP: { bytes: 1000, hz: 1 }, TIM: { bytes: 300, hz: 1 }, SSM: { bytes: 60, hz: 2 }, BSM: { bytes: 300, hz: 10 }, SRM: { bytes: 80, hz: 2 }, PSM: { bytes: 200, hz: 5 }, SDSM: { bytes: 900, hz: 10 } };
 // Approx. downstream load the TC pushes onto the cabinet wire (kbps). MAP only
 // rides the wire when it is stored on the TC — that's the tradeoff, quantified.
 function backhaulKbps(enabled, mapStore) {
@@ -334,7 +349,7 @@ function backhaulKbps(enabled, mapStore) {
 }
 
 // Cross-links from the sim to the Glossary.
-const MSG_GLOSSARY = { SPaT: 'SPaT (Signal Phase and Timing)', MAP: 'MAP (Intersection Geometry)', BSM: 'BSM (Basic Safety Message)', PSM: 'PSM (Personal Safety Message)', SRM: 'SRM / SSM', SSM: 'SRM / SSM', TIM: 'TIM (Traveler Information Message)' };
+const MSG_GLOSSARY = { SPaT: 'SPaT (Signal Phase and Timing)', MAP: 'MAP (Intersection Geometry)', BSM: 'BSM (Basic Safety Message)', PSM: 'PSM (Personal Safety Message)', SRM: 'SRM / SSM', SSM: 'SRM / SSM', TIM: 'TIM (Traveler Information Message)', SDSM: 'SDSM (Sensor Data Sharing Message)' };
 const DEVICE_GLOSSARY = { tc: 'Traffic Controller (TC)', rsu: 'Roadside Unit (RSU)', obu: 'On-Board Unit (OBU)', ev: 'On-Board Unit (OBU)', bus: 'On-Board Unit (OBU)', ped: 'VRU (Vulnerable Road User)' };
 // Resolve a use-case message/label to a matching Glossary term (or null).
 function glossaryTermFor(label) {
@@ -358,10 +373,12 @@ function decodePacket(msg, ctx) {
     SRM: { messageId: 'SRM', requestor: ctx.vehType === 'bus' ? 'publicTransport (transit)' : 'emergency (fire/EMS/police)', requestType: ctx.vehType === 'bus' ? 'priority (extend green)' : 'preemption (immediate green)', requestedSignalGroup: 4, eta_s: 6.5 },
     SSM: { messageId: 'SSM', requestId: 41, status: 'granted', signalGroup: 4 },
     TIM: { messageId: 'TIM', advisory: 'reduced speed / work zone', advisorySpeed_kph: 45, appliesTo: 'lane 2, next 300 m' },
+    SDSM: { messageId: 'SDSM', standard: 'SAE J3224', source: 'RSU / V2X Hub', objectCount: 3, objects: [{ id: 17, type: 'pedestrian', lat: 42.30902, lon: -83.06972, speed_mps: 1.3 }, { id: 21, type: 'vehicle', speed_mps: 12.8, heading_deg: 271 }], note: 'shares infrastructure-detected objects with vehicles' },
+    objects: { messageId: 'detected objects', kind: 'proprietary sensor feed (not OTA)', from: 'LiDAR / radar / camera', list: [{ id: 17, class: 'pedestrian', x_m: 2.4, y_m: -8.1, v_mps: 1.3 }, { id: 21, class: 'vehicle', v_mps: 12.8 }], note: 'fused by the V2X Hub → broadcast as an SDSM' },
     phase: { control: 'NTCIP 1202 phase/timing (not a J2735 radio message)', phase: 2, state: 'GREEN', greenTime_s: 12 },
     data: { note: 'generic link payload' },
   }[msg] || { messageId: msg };
-  return (msg === 'phase' || msg === 'data') ? base : { ...base, security: sec };
+  return (msg === 'phase' || msg === 'data' || msg === 'objects') ? base : { ...base, security: sec };
 }
 
 // Explanations shown in the connection detail panel.
@@ -739,7 +756,7 @@ function WorldBuilderTab({ openGlossary }) {
   const [simT, setSimT] = useState(0);                // sim-time in seconds (0..SIM_LOOP), scrubbable
   const [speed, setSpeed] = useState(1);              // playback speed multiplier
   const [dirMode, setDirMode] = useState(prefs.dirMode || 'both'); // 'fwd' | 'rev' | 'both'
-  const [enabled, setEnabled] = useState(prefs.enabled || {});     // per-message on/off (missing = on)
+  const [enabled, setEnabled] = useState(prefs.enabled || { SRM: false, SSM: false }); // per-message on/off (missing = on); SRM/SSM off until an EV/bus appears
   const [mapStore, setMapStore] = useState(prefs.mapStore || 'rsu'); // MAP geometry: 'rsu' | 'tc'
   const [mapOpen, setMapOpen] = useState(false);                     // MAP-storage detail: collapsed by default
   const [worlds, setWorlds] = useState(loadWorlds);   // saved worlds (localStorage)
@@ -988,6 +1005,29 @@ function WorldBuilderTab({ openGlossary }) {
   const roads = objects.filter((o) => TYPES[o.type].cat === 'road');
   const devices = objects.filter((o) => TYPES[o.type].cat === 'device');
 
+  // What the built world can justify — so the sim only generates messages that
+  // make sense: SPaT/MAP/SSM need a signal; SDSM a sensor; SRM/SSM an authorized
+  // (EV/bus) requester; TIM a network source. Generalises to any canvas.
+  const worldCtx = useMemo(() => {
+    const ds = objects.filter((o) => TYPES[o.type].cat === 'device');
+    return {
+      signal: ds.some((o) => o.type === 'tc' || o.type === 'signal'),
+      sensor: ds.some((o) => isSensor(o.type)),
+      priority: ds.some((o) => canRequestPriority(o.type)),
+      network: ds.some((o) => o.type === 'tmc' || o.type === 'celltower'),
+    };
+  }, [objects]);
+  // Auto-enable SRM/SSM the moment an EV/bus is introduced (and clear them when
+  // the last one leaves). Fires only on the transition, so manual toggles in
+  // between are respected.
+  const prevPriority = useRef();
+  useEffect(() => {
+    if (worldCtx.priority !== prevPriority.current) {
+      prevPriority.current = worldCtx.priority;
+      setEnabled((e) => ({ ...e, SRM: worldCtx.priority, SSM: worldCtx.priority }));
+    }
+  }, [worldCtx.priority]);
+
   // ----- "what breaks": per-RSU security (1609.2) + protocol conversion -----
   const rsuSecure = (o) => o.secure !== false;      // default ON
   const rsuConvert = (o) => o.convert !== false;    // default ON
@@ -1234,7 +1274,7 @@ function WorldBuilderTab({ openGlossary }) {
                 {conns.concat(autoLinks).map((c) => {
                   const A = byId[c.from], B = byId[c.to]; if (!A || !B) return null;
                   const a = { ...A, ...lp(A) }, b = { ...B, ...lp(B) };   // live-positioned endpoints
-                  const streams = linkStreams(a, b, dirMode, enabled, mapStore);
+                  const streams = linkStreams(a, b, dirMode, enabled, mapStore, worldCtx);
                   const kind = connKind(a.type, b.type);
                   const rsu = kind === 'wireless' ? (a.type === 'rsu' ? a : b) : null;
                   const classic = rsu ? upstreamClassic(rsu.id) : false;
@@ -2257,7 +2297,7 @@ const SCENARIOS = [
         id: 'lidar', label: 'LiDAR · pedestrian', tagline: 'Detects a pedestrian with no device',
         duration: 9,
         why: 'A pedestrian with no phone or beacon steps toward the crosswalk — invisible to V2X. A roadside LiDAR detects them in 3-D and feeds the V2X Hub / RSU, which broadcasts a PSM on their behalf. An approaching connected vehicle receives it and yields. This is how infrastructure protects UNEQUIPPED road users.',
-        messages: ['DET', 'PSM'],
+        messages: ['objects', 'PSM'],
         frame(t) {
           const cx = 470;
           const ex = t < 3.6 ? lerp(-40, 300, seg(t, 0, 3.6)) : (t < 5.4 ? lerp(300, 398, easeOut(seg(t, 3.6, 5.4))) : 398);
@@ -2268,7 +2308,7 @@ const SCENARIOS = [
           const sensors = [{ x: cx, y: 118, kind: 'lidar', tx: cx, active: detect, label: detect ? 'ped detected' : '' }];
           const packets = []; let banner;
           if (t < 1.6) banner = { text: 'A pedestrian with NO phone/beacon nears the crosswalk', tone: 'info', sub: 'invisible to V2X on their own' };
-          else if (t < 3) { packets.push({ ...lerpPt({ x: cx, y: 132 }, G.rsu, seg(t, 1.6, 3)), label: 'DET', tone: TONE.cyan }); banner = { text: 'Roadside LiDAR detects them in 3-D → sends the detection to the RSU', tone: 'warn' }; }
+          else if (t < 3) { packets.push({ ...lerpPt({ x: cx, y: 132 }, G.rsu, seg(t, 1.6, 3)), label: 'objects', tone: TONE.cyan }); banner = { text: 'Roadside LiDAR detects them in 3-D → sends detected objects to the RSU', tone: 'warn' }; }
           else if (t < 5.6) { packets.push({ ...lerpPt(G.rsu, { x: ex, y: G.ewLaneY }, ((t - 3) % 1.3) / 1.3), label: 'PSM', tone: TONE.amber }); banner = { text: '⚠ Infrastructure broadcasts a PSM on the pedestrian’s behalf — the car yields', tone: 'warn' }; }
           else banner = { text: 'The car stopped for a pedestrian neither of them could have announced', tone: 'ok' };
           return { layout: 'straightH', infra: 'rsu', crosswalk: cx, cars, ped, sensors, packets, banner, waves: detect };
@@ -2278,7 +2318,7 @@ const SCENARIOS = [
         id: 'radar', label: 'Radar · speed', tagline: 'Measures approach speed (no loops)',
         duration: 9,
         why: 'A roadside radar measures the speed and range of approaching vehicles in any weather — replacing inductive loops. Here it detects a fast vehicle in the “dilemma zone” and feeds the controller, which briefly holds the green so the vehicle clears safely instead of being caught by the yellow.',
-        messages: ['DET'],
+        messages: ['tracks'],
         frame(t) {
           const vx = lerp(-40, 980, seg(t, 0, 9));
           const detect = t >= 1.4 && t < 5;
@@ -2287,7 +2327,7 @@ const SCENARIOS = [
           const sensors = [{ x: 250, y: 118, kind: 'radar', tx: 250, active: detect, label: detect ? '92 km/h' : '' }];
           const packets = []; let banner;
           if (t < 1.4) banner = { text: 'A vehicle approaches fast — and there are no inductive loops here', tone: 'info' };
-          else if (t < 3) { packets.push({ ...lerpPt({ x: 250, y: 132 }, G.tc, seg(t, 1.4, 3)), label: 'DET', tone: TONE.cyan }); banner = { text: 'Roadside radar measures its speed & range → feeds the controller', tone: 'info', sub: '≈ 92 km/h · in the dilemma zone' }; }
+          else if (t < 3) { packets.push({ ...lerpPt({ x: 250, y: 132 }, G.tc, seg(t, 1.4, 3)), label: 'tracks', tone: TONE.cyan }); banner = { text: 'Roadside radar measures its speed & range → feeds the controller', tone: 'info', sub: '≈ 92 km/h · in the dilemma zone' }; }
           else if (t < 5) banner = { text: 'Controller holds the green a beat — the vehicle clears, not caught by the yellow', tone: 'ok' };
           else banner = { text: 'Radar-actuated detection — loops replaced, works in fog / rain / night', tone: 'ok' };
           return { layout: 'cross', infra: 'signals', ew: green ? 'green' : 'red', ns: green ? 'red' : 'green', cars, sensors, packets, banner, waves: detect };
@@ -2297,7 +2337,7 @@ const SCENARIOS = [
         id: 'camera', label: 'Camera · video', tagline: 'Classifies & flags violations',
         duration: 8,
         why: 'An AI video/thermal camera watches the approach, classifies every road user, and reads events a radar or loop cannot — like red-light running or wrong-way driving. Detections feed the controller and V2X Hub for actuation, counts and safety applications.',
-        messages: ['DET'],
+        messages: ['objects'],
         frame(t) {
           const ew = t < 3 ? 'green' : t < 4.2 ? 'yellow' : 'red';
           const vx = lerp(-40, 900, seg(t, 0, 8));
@@ -2306,7 +2346,7 @@ const SCENARIOS = [
           const sensors = [{ x: 356, y: 112, kind: 'camera', tx: 356, active: detect, label: detect ? 'violation' : '' }];
           const packets = []; let banner;
           if (t < 3.6) banner = { text: 'An AI camera watches the approach & classifies every road user', tone: 'info' };
-          else if (t < 5) { packets.push({ ...lerpPt({ x: 356, y: 128 }, G.tc, seg(t, 3.6, 5)), label: 'DET', tone: TONE.cyan }); banner = { text: '⚠ Camera flags a red-light violation → logs the event & feeds the system', tone: 'warn' }; }
+          else if (t < 5) { packets.push({ ...lerpPt({ x: 356, y: 128 }, G.tc, seg(t, 3.6, 5)), label: 'objects', tone: TONE.cyan }); banner = { text: '⚠ Camera flags a red-light violation → logs the event & feeds the system', tone: 'warn' }; }
           else banner = { text: 'Video detection: actuation, turning counts, red-light & wrong-way events', tone: 'ok' };
           return { layout: 'cross', infra: 'signals', ew, ns: ew === 'green' ? 'red' : 'green', cars, sensors, packets, banner, waves: detect };
         },
@@ -2316,8 +2356,8 @@ const SCENARIOS = [
   {
     id: 'hubfusion', category: 'V2I', icon: '🖥️', title: 'Sensor Fusion via V2X Hub', tagline: 'LiDAR + radar + camera → one fused scene',
     duration: 9,
-    why: 'A V2X Hub (an open-source roadside computing platform) collects detections from every sensor — radar, LiDAR and camera — and fuses them into one consistent picture of the intersection. It then hands a signed message set to the RSU to broadcast. The payoff: even unequipped road users get a “voice” over V2X, from redundant, all-weather sensing.',
-    messages: ['DET', 'PSM'],
+    why: 'A V2X Hub (an open-source roadside computing platform) collects detected objects from every sensor — radar, LiDAR and camera — and fuses them into one consistent picture of the intersection. It then generates an SDSM (Sensor Data Sharing Message, SAE J3224) for the RSU to broadcast. The payoff: even unequipped road users get a “voice” over V2X, from redundant, all-weather sensing.',
+    messages: ['objects', 'SDSM'],
     frame(t) {
       const ex = t < 4 ? lerp(-40, 300, seg(t, 0, 4)) : (t < 5.5 ? lerp(300, 398, easeOut(seg(t, 4, 5.5))) : 398);
       const py = t < 2 ? 360 : lerp(360, 250, seg(t, 2, 7.5));
@@ -2331,8 +2371,8 @@ const SCENARIOS = [
       ];
       const packets = []; let banner;
       if (t < 1.5) banner = { text: 'Three sensors watch the intersection — radar, LiDAR and a camera', tone: 'info' };
-      else if (t < 3.4) { [250, 356, 470].forEach((sx) => packets.push({ ...lerpPt({ x: sx, y: 132 }, G.hub, seg(t, 1.5, 3.4)), label: 'DET', tone: TONE.cyan })); banner = { text: 'Every detection streams into the V2X Hub, which fuses them into one scene', tone: 'info' }; }
-      else if (t < 6) { packets.push({ ...lerpPt(G.rsu, { x: ex, y: G.ewLaneY }, ((t - 3.4) % 1.3) / 1.3), label: 'PSM', tone: TONE.amber }); banner = { text: '⚠ The Hub feeds the RSU a fused message set — the car is warned of the pedestrian', tone: 'warn' }; }
+      else if (t < 3.4) { [250, 356, 470].forEach((sx) => packets.push({ ...lerpPt({ x: sx, y: 132 }, G.hub, seg(t, 1.5, 3.4)), label: 'objects', tone: TONE.cyan })); banner = { text: 'Detected objects from every sensor stream into the V2X Hub, which fuses them', tone: 'info' }; }
+      else if (t < 6) { packets.push({ ...lerpPt(G.rsu, { x: ex, y: G.ewLaneY }, ((t - 3.4) % 1.3) / 1.3), label: 'SDSM', tone: TONE.cyan }); banner = { text: '⚠ The Hub broadcasts an SDSM (fused detections) — the car is warned of the pedestrian', tone: 'warn' }; }
       else banner = { text: 'Sensor fusion via the V2X Hub — even unequipped road users get a voice', tone: 'ok' };
       return { layout: 'straightH', infra: 'rsu', hub: true, crosswalk: 470, cars, ped, sensors, packets, banner, waves: detect };
     },
@@ -2690,6 +2730,21 @@ TravelerInformation ::= SEQUENCE {
 }
 Used for work-zone, speed, weather & incident alerts.
 — © SAE J2735, paywalled.` },
+    { term: 'SDSM (Sensor Data Sharing Message)', child: 'SAE J3224', def: 'The message that lets infrastructure (or a vehicle) share OBJECTS it has DETECTED with its sensors — LiDAR, radar, cameras. A V2X Hub fuses roadside sensor detections and broadcasts an SDSM so connected vehicles learn about road users those vehicles can’t see themselves, including UNEQUIPPED pedestrians and cars with no OBU. Distinct from a BSM (a vehicle describing ITSELF) — an SDSM describes OTHERS the sensor sees. The raw sensor→hub feed is a proprietary detected-object list, not this over-the-air message.',
+      format: `SensorDataSharingMessage — representative (SAE J3224)
+SensorDataSharingMessage ::= SEQUENCE {
+  msgCnt, sourceID,
+  equipmentType (rsu / obu / vru),
+  sDSMTimeStamp,
+  refPos      Position3D,          -- sensor reference point
+  objects     DetectedObjectList { -- 1..255
+    objectID, type (vehicle/vru/obstacle),
+    position (offset from refPos), speed, heading,
+    accuracy, classification confidence
+  }
+}
+Carried in an IEEE 1609.2 signed frame, like other V2X msgs.
+— Representative; © SAE J3224, paywalled.` },
   ]},
   { group: 'Security', icon: '🔒', items: [
     { term: 'IEEE 1609.2', def: 'The V2X message-security standard. Every over-the-air frame is signed (ECDSA) with a certificate so receivers can verify authenticity and integrity — and reject spoofed or tampered messages.',

@@ -16,11 +16,14 @@ is inlined into that one file.
   roads, a **pole + mast arm**, or a pre-wired 4-way intersection. Signals & sensors
   **snap onto the mast arm**, an **RSU attaches to the pole side**, and the arm
   **flips** left/right. Wire devices port-to-port, pick a real vendor model per
-  device and read its spec sheet, then **Simulate**: packets flow along every link
-  — sensor **detection (DET)** feeds into the hub/controller, and **V2N** rides the
-  cellular **Uu** link to the tower then **backhaul** to the TMC/cloud (TIM down,
-  probe data up) — with adjustable direction, per-message toggles, a collapsible
-  MAP-storage tradeoff, and per-RSU security & conversion. Drivable vehicles
+  device and read its spec sheet, then **Simulate**: the sim generates only the
+  messages the world can justify — sensors emit a detected-**`objects`** feed that
+  the V2X Hub fuses into an **`SDSM`** (SAE J3224); **SPaT/MAP/SSM** appear only
+  with a signal controller; **SRM/SSM** switch on the moment an emergency vehicle
+  or bus is added; and **V2N** rides the cellular **Uu** link to the tower then
+  **backhaul** to the TMC/cloud (TIM down, probe data up) — with adjustable
+  direction, per-message toggles, a collapsible MAP-storage tradeoff, and per-RSU
+  security & conversion. Drivable vehicles
   form/break links in RSU range; click a packet for its decoded payload.
   Save/load/export/share worlds; undo/redo.
 - **Use Cases** — animated scenarios grouped by V2I / V2V / V2P / V2N

@@ -25,7 +25,7 @@ const renders = (el, msg) => { try { RS.renderToStaticMarkup(el); pass++; } catc
 function loadApp() {
   const jsx = fs.readFileSync(path.join(ROOT, 'src/app.jsx'), 'utf8').replace(/ReactDOM\.createRoot[\s\S]*$/, '');
   const code = Babel.transform(jsx, { presets: ['react'] }).code;
-  const names = 'App,WorldBuilderTab,UseCasesTab,GlossaryTab,AnatomyTab,CabinetDiagram,RsuDiagram,ObuDiagram,FirstRun,QuizTab,MiniScene,DeviceArt,SCENARIOS,QUIZ,GLOSSARY,TYPES,MODELS,linkStreams,decodePacket,liveXY,connKind,isVehicle,isSensor,canRequestPriority,backhaulKbps,glossaryTermFor,validCabPair,findGlossaryItem';
+  const names = 'App,WorldBuilderTab,UseCasesTab,GlossaryTab,AnatomyTab,CabinetDiagram,RsuDiagram,ObuDiagram,FirstRun,QuizTab,MiniScene,DeviceArt,SCENARIOS,QUIZ,GLOSSARY,TYPES,MODELS,ALL_MSGS,linkStreams,decodePacket,liveXY,connKind,isVehicle,isSensor,canRequestPriority,backhaulKbps,glossaryTermFor,validCabPair,findGlossaryItem';
   const factory = new Function('React', 'ReactDOM', 'window', 'document', 'performance', 'requestAnimationFrame', 'cancelAnimationFrame', 'localStorage', code + `\n;return {${names}};`);
   const win = { innerWidth: 1440, addEventListener() {}, removeEventListener() {}, location: { href: 'file:///x', hash: '' }, history: { replaceState() {} } };
   const ls = { getItem: () => null, setItem() {}, removeItem() {} };
@@ -90,8 +90,18 @@ eq(L(m.linkStreams(ped, rsu, 'both', {}, 'rsu')), ['PSM', 'SPaT'], 'v2p rsu = PS
 eq(L(m.linkStreams(ped, car, 'both', {}, 'rsu')), ['BSM', 'PSM'], 'v2p vehicle = PSM up + BSM down');
 eq(L(m.linkStreams(tc, sig, 'fwd', {}, 'rsu')), ['phase'], 'signal = phase control');
 const cam = { type: 'camera', x: 0, y: 0 }, hub = { type: 'hub', x: 80, y: 0 };
-eq(L(m.linkStreams(cam, hub, 'both', {}, 'rsu')), ['DET'], 'sensor → hub = DET feed');
+eq(L(m.linkStreams(cam, hub, 'both', {}, 'rsu')), ['objects'], 'sensor → hub = detected-object feed');
 eq(L(m.linkStreams(cam, hub, 'fwd', {}, 'rsu')), [], 'sensor feed is upstream-only (no fwd)');
+// world-context gating: SPaT/MAP/SSM need a signal; SDSM needs a sensor; SRM needs signal+priority
+const noSig = { signal: false, sensor: true, priority: false, network: false };
+const full = { signal: true, sensor: true, priority: true, network: true };
+eq(L(m.linkStreams(rsu, car, 'fwd', {}, 'rsu', noSig)), ['SDSM'], 'no TC → no SPaT/SSM; a sensor → SDSM');
+ok(!m.linkStreams(rsu, car, 'fwd', {}, 'rsu', noSig).some((s) => s.label === 'SPaT'), 'no signal controller → no SPaT');
+ok(m.linkStreams(rsu, car, 'fwd', {}, 'rsu', full).some((s) => s.label === 'SPaT'), 'signal present → SPaT broadcast');
+ok(m.linkStreams(rsu, car, 'fwd', {}, 'rsu', full).some((s) => s.label === 'SDSM'), 'sensor present → SDSM broadcast');
+eq(L(m.linkStreams(ev, rsu, 'rev', {}, 'rsu', { signal: false, sensor: false, priority: true, network: false })), ['BSM'], 'EV but no signal → no SRM (nothing to request from)');
+ok(m.linkStreams(ev, rsu, 'rev', {}, 'rsu', full).some((s) => s.label === 'SRM'), 'EV + signal + priority → SRM');
+ok(m.ALL_MSGS.includes('SDSM'), 'SDSM is a toggleable message');
 ok(m.isSensor('lidar') && m.isSensor('radar') && m.isSensor('camera') && !m.isSensor('rsu'), 'isSensor');
 ok(m.MODELS.hub && m.MODELS.lidar && m.MODELS.radar && m.MODELS.camera, 'new devices have vendor spec sheets');
 ok(m.TYPES.hub && m.TYPES.mast && m.TYPES.lidar && m.TYPES.radar && m.TYPES.camera, 'new device types exist');
