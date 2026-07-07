@@ -25,7 +25,7 @@ const renders = (el, msg) => { try { RS.renderToStaticMarkup(el); pass++; } catc
 function loadApp() {
   const jsx = fs.readFileSync(path.join(ROOT, 'src/app.jsx'), 'utf8').replace(/ReactDOM\.createRoot[\s\S]*$/, '');
   const code = Babel.transform(jsx, { presets: ['react'] }).code;
-  const names = 'App,WorldBuilderTab,UseCasesTab,GlossaryTab,AnatomyTab,CabinetDiagram,RsuDiagram,ObuDiagram,FirstRun,QuizTab,MiniScene,DeviceArt,SCENARIOS,QUIZ,GLOSSARY,TYPES,MODELS,ALL_MSGS,linkStreams,decodePacket,liveXY,connKind,isVehicle,isSensor,canRequestPriority,backhaulKbps,glossaryTermFor,validCabPair,findGlossaryItem';
+  const names = 'App,WorldBuilderTab,UseCasesTab,GlossaryTab,AnatomyTab,CabinetDiagram,RsuDiagram,ObuDiagram,FirstRun,QuizTab,MiniScene,DeviceArt,SCENARIOS,QUIZ,GLOSSARY,TYPES,MODELS,ALL_MSGS,MSG_COLOR,linkStreams,decodePacket,liveXY,connKind,isVehicle,isSensor,canRequestPriority,backhaulKbps,glossaryTermFor,validCabPair,findGlossaryItem';
   const factory = new Function('React', 'ReactDOM', 'window', 'document', 'performance', 'requestAnimationFrame', 'cancelAnimationFrame', 'localStorage', code + `\n;return {${names}};`);
   const win = { innerWidth: 1440, addEventListener() {}, removeEventListener() {}, location: { href: 'file:///x', hash: '' }, history: { replaceState() {} } };
   const ls = { getItem: () => null, setItem() {}, removeItem() {} };
@@ -90,8 +90,17 @@ eq(L(m.linkStreams(ped, rsu, 'both', {}, 'rsu')), ['PSM', 'SPaT'], 'v2p rsu = PS
 eq(L(m.linkStreams(ped, car, 'both', {}, 'rsu')), ['BSM', 'PSM'], 'v2p vehicle = PSM up + BSM down');
 eq(L(m.linkStreams(tc, sig, 'fwd', {}, 'rsu')), ['phase'], 'signal = phase control');
 const cam = { type: 'camera', x: 0, y: 0 }, hub = { type: 'hub', x: 80, y: 0 };
-eq(L(m.linkStreams(cam, hub, 'both', {}, 'rsu')), ['objects'], 'sensor → hub = detected-object feed');
+eq(L(m.linkStreams(cam, hub, 'both', {}, 'rsu')), ['video'], 'camera → hub = video feed');
+eq(L(m.linkStreams({ type: 'lidar', x: 0, y: 0 }, hub, 'both', {}, 'rsu')), ['point cloud'], 'LiDAR → hub = point-cloud feed');
+eq(L(m.linkStreams({ type: 'radar', x: 0, y: 0 }, hub, 'both', {}, 'rsu')), ['tracks'], 'radar → hub = tracks feed');
 eq(L(m.linkStreams(cam, hub, 'fwd', {}, 'rsu')), [], 'sensor feed is upstream-only (no fwd)');
+// each message now has its own hue — no two share a color
+ok(m.ALL_MSGS.every((k) => typeof m.MSG_COLOR[k] === 'string'), 'every message has a color');
+eq(new Set(m.ALL_MSGS.map((k) => m.MSG_COLOR[k])).size, m.ALL_MSGS.length, 'every message has a UNIQUE color');
+// sensor feeds decode to their specific data type
+ok(/point cloud/i.test(JSON.stringify(m.decodePacket('point cloud', {}))), 'LiDAR feed decodes to a point cloud');
+ok(/track/i.test(JSON.stringify(m.decodePacket('tracks', {}))), 'radar feed decodes to tracks');
+ok(/video|frame/i.test(JSON.stringify(m.decodePacket('video', {}))), 'camera feed decodes to video/frames');
 // world-context gating: SPaT/MAP/SSM need a signal; SDSM needs a sensor; SRM needs signal+priority
 const noSig = { signal: false, sensor: true, priority: false, network: false };
 const full = { signal: true, sensor: true, priority: true, network: true };

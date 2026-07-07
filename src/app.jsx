@@ -250,7 +250,16 @@ const CONN_STYLE = {
 
 // SAE J2735 messages the user can fine-tune, and their packet colors.
 const ALL_MSGS = ['SPaT', 'MAP', 'TIM', 'SSM', 'BSM', 'SRM', 'PSM', 'SDSM'];
-const MSG_COLOR = { SPaT: '#22d3ee', MAP: '#22d3ee', TIM: '#a78bfa', SSM: '#34d399', BSM: '#34d399', SRM: '#fbbf24', PSM: '#fbbf24', SDSM: '#38bdf8', objects: '#7dd3fc', data: '#64748b' };
+// Every message gets its own hue (validated for colorblind separation on the
+// dark surface; the labeled toggle chips are the key). Anchors kept from the old
+// grouping — SPaT cyan, BSM green, SRM amber, TIM violet — the former duplicates
+// (MAP, SSM, PSM, SDSM) now have distinct hues. Sensor feeds are a cool family.
+const MSG_COLOR = {
+  SPaT: '#22d3ee', MAP: '#3b82f6', BSM: '#34d399', SSM: '#a3e635',
+  SRM: '#fbbf24', PSM: '#f472b6', TIM: '#a78bfa', SDSM: '#fb923c',
+  'point cloud': '#38bdf8', tracks: '#2dd4bf', video: '#818cf8', objects: '#7dd3fc',
+  data: '#64748b',
+};
 
 // Orient a wired link so packets flow upstream (sensors/TC/hub) → RSU → downstream (OBU/VRU).
 function orientLink(a, b) {
@@ -277,9 +286,10 @@ function linkStreams(a, b, dir, enabled, mapStore, ctx) {
 
   if (kind === 'sensor') {                        // LiDAR/radar/camera → infrastructure
     const [sen, infra] = isSensor(a.type) ? [a, b] : [b, a];
-    // a proprietary detected-object feed (not an OTA J2735 message) — the Hub/TC
-    // fuses these and generates an SDSM for the RSU to broadcast.
-    if (showUp) out.push({ from: { x: sen.x, y: sen.y }, to: { x: infra.x, y: infra.y }, label: 'objects', color: MSG_COLOR.objects, dir: 'up' });
+    // each sensor streams its own kind of raw data (proprietary, not OTA J2735);
+    // the Hub/TC fuses these and generates an SDSM for the RSU to broadcast.
+    const feed = sen.type === 'lidar' ? 'point cloud' : sen.type === 'radar' ? 'tracks' : 'video';
+    if (showUp) out.push({ from: { x: sen.x, y: sen.y }, to: { x: infra.x, y: infra.y }, label: feed, color: MSG_COLOR[feed], dir: 'up' });
     return out;
   }
   if (kind === 'cellular') {                       // V2N Uu air interface: vehicle ↔ cell tower
@@ -374,11 +384,15 @@ function decodePacket(msg, ctx) {
     SSM: { messageId: 'SSM', requestId: 41, status: 'granted', signalGroup: 4 },
     TIM: { messageId: 'TIM', advisory: 'reduced speed / work zone', advisorySpeed_kph: 45, appliesTo: 'lane 2, next 300 m' },
     SDSM: { messageId: 'SDSM', standard: 'SAE J3224', source: 'RSU / V2X Hub', objectCount: 3, objects: [{ id: 17, type: 'pedestrian', lat: 42.30902, lon: -83.06972, speed_mps: 1.3 }, { id: 21, type: 'vehicle', speed_mps: 12.8, heading_deg: 271 }], note: 'shares infrastructure-detected objects with vehicles' },
+    'point cloud': { messageId: 'LiDAR point cloud', kind: 'proprietary sensor feed (not OTA)', sensor: 'LiDAR', pointsPerScan: '~131,072', scanRate_hz: 10, rangeAccuracy_cm: '±2', note: '3-D returns → object detection; fused by the Hub into an SDSM' },
+    tracks: { messageId: 'radar tracks', kind: 'proprietary sensor feed (not OTA)', sensor: 'radar (mmWave)', trackList: [{ id: 3, range_m: 82, speed_mps: 25.6, azimuth_deg: -4 }, { id: 5, range_m: 140, speed_mps: 13.1, azimuth_deg: 2 }], weather: 'all-weather', note: 'range/speed/angle per object; fused into an SDSM' },
+    video: { messageId: 'camera video / detections', kind: 'proprietary sensor feed (not OTA)', sensor: 'AI video / thermal', resolution: '1920×1080', fps: 30, classifies: ['vehicle', 'pedestrian', 'cyclist'], events: ['red-light-running', 'wrong-way'], note: 'frames + classifications; fused into an SDSM' },
     objects: { messageId: 'detected objects', kind: 'proprietary sensor feed (not OTA)', from: 'LiDAR / radar / camera', list: [{ id: 17, class: 'pedestrian', x_m: 2.4, y_m: -8.1, v_mps: 1.3 }, { id: 21, class: 'vehicle', v_mps: 12.8 }], note: 'fused by the V2X Hub → broadcast as an SDSM' },
     phase: { control: 'NTCIP 1202 phase/timing (not a J2735 radio message)', phase: 2, state: 'GREEN', greenTime_s: 12 },
     data: { note: 'generic link payload' },
   }[msg] || { messageId: msg };
-  return (msg === 'phase' || msg === 'data' || msg === 'objects') ? base : { ...base, security: sec };
+  const rawFeed = msg === 'phase' || msg === 'data' || msg === 'objects' || msg === 'point cloud' || msg === 'tracks' || msg === 'video';
+  return rawFeed ? base : { ...base, security: sec };
 }
 
 // Explanations shown in the connection detail panel.
@@ -2297,7 +2311,7 @@ const SCENARIOS = [
         id: 'lidar', label: 'LiDAR · pedestrian', tagline: 'Detects a pedestrian with no device',
         duration: 9,
         why: 'A pedestrian with no phone or beacon steps toward the crosswalk — invisible to V2X. A roadside LiDAR detects them in 3-D and feeds the V2X Hub / RSU, which broadcasts a PSM on their behalf. An approaching connected vehicle receives it and yields. This is how infrastructure protects UNEQUIPPED road users.',
-        messages: ['objects', 'PSM'],
+        messages: ['point cloud', 'PSM'],
         frame(t) {
           const cx = 470;
           const ex = t < 3.6 ? lerp(-40, 300, seg(t, 0, 3.6)) : (t < 5.4 ? lerp(300, 398, easeOut(seg(t, 3.6, 5.4))) : 398);
@@ -2308,7 +2322,7 @@ const SCENARIOS = [
           const sensors = [{ x: cx, y: 118, kind: 'lidar', tx: cx, active: detect, label: detect ? 'ped detected' : '' }];
           const packets = []; let banner;
           if (t < 1.6) banner = { text: 'A pedestrian with NO phone/beacon nears the crosswalk', tone: 'info', sub: 'invisible to V2X on their own' };
-          else if (t < 3) { packets.push({ ...lerpPt({ x: cx, y: 132 }, G.rsu, seg(t, 1.6, 3)), label: 'objects', tone: TONE.cyan }); banner = { text: 'Roadside LiDAR detects them in 3-D → sends detected objects to the RSU', tone: 'warn' }; }
+          else if (t < 3) { packets.push({ ...lerpPt({ x: cx, y: 132 }, G.rsu, seg(t, 1.6, 3)), label: 'point cloud', tone: TONE.cyan }); banner = { text: 'Roadside LiDAR detects them in 3-D → sends a point cloud to the RSU', tone: 'warn' }; }
           else if (t < 5.6) { packets.push({ ...lerpPt(G.rsu, { x: ex, y: G.ewLaneY }, ((t - 3) % 1.3) / 1.3), label: 'PSM', tone: TONE.amber }); banner = { text: '⚠ Infrastructure broadcasts a PSM on the pedestrian’s behalf — the car yields', tone: 'warn' }; }
           else banner = { text: 'The car stopped for a pedestrian neither of them could have announced', tone: 'ok' };
           return { layout: 'straightH', infra: 'rsu', crosswalk: cx, cars, ped, sensors, packets, banner, waves: detect };
@@ -2337,7 +2351,7 @@ const SCENARIOS = [
         id: 'camera', label: 'Camera · video', tagline: 'Classifies & flags violations',
         duration: 8,
         why: 'An AI video/thermal camera watches the approach, classifies every road user, and reads events a radar or loop cannot — like red-light running or wrong-way driving. Detections feed the controller and V2X Hub for actuation, counts and safety applications.',
-        messages: ['objects'],
+        messages: ['video'],
         frame(t) {
           const ew = t < 3 ? 'green' : t < 4.2 ? 'yellow' : 'red';
           const vx = lerp(-40, 900, seg(t, 0, 8));
@@ -2346,7 +2360,7 @@ const SCENARIOS = [
           const sensors = [{ x: 356, y: 112, kind: 'camera', tx: 356, active: detect, label: detect ? 'violation' : '' }];
           const packets = []; let banner;
           if (t < 3.6) banner = { text: 'An AI camera watches the approach & classifies every road user', tone: 'info' };
-          else if (t < 5) { packets.push({ ...lerpPt({ x: 356, y: 128 }, G.tc, seg(t, 3.6, 5)), label: 'objects', tone: TONE.cyan }); banner = { text: '⚠ Camera flags a red-light violation → logs the event & feeds the system', tone: 'warn' }; }
+          else if (t < 5) { packets.push({ ...lerpPt({ x: 356, y: 128 }, G.tc, seg(t, 3.6, 5)), label: 'video', tone: TONE.cyan }); banner = { text: '⚠ Camera flags a red-light violation → feeds video + detections to the system', tone: 'warn' }; }
           else banner = { text: 'Video detection: actuation, turning counts, red-light & wrong-way events', tone: 'ok' };
           return { layout: 'cross', infra: 'signals', ew, ns: ew === 'green' ? 'red' : 'green', cars, sensors, packets, banner, waves: detect };
         },
@@ -2357,7 +2371,7 @@ const SCENARIOS = [
     id: 'hubfusion', category: 'V2I', icon: '🖥️', title: 'Sensor Fusion via V2X Hub', tagline: 'LiDAR + radar + camera → one fused scene',
     duration: 9,
     why: 'A V2X Hub (an open-source roadside computing platform) collects detected objects from every sensor — radar, LiDAR and camera — and fuses them into one consistent picture of the intersection. It then generates an SDSM (Sensor Data Sharing Message, SAE J3224) for the RSU to broadcast. The payoff: even unequipped road users get a “voice” over V2X, from redundant, all-weather sensing.',
-    messages: ['objects', 'SDSM'],
+    messages: ['point cloud', 'SDSM'],
     frame(t) {
       const ex = t < 4 ? lerp(-40, 300, seg(t, 0, 4)) : (t < 5.5 ? lerp(300, 398, easeOut(seg(t, 4, 5.5))) : 398);
       const py = t < 2 ? 360 : lerp(360, 250, seg(t, 2, 7.5));
@@ -2371,7 +2385,7 @@ const SCENARIOS = [
       ];
       const packets = []; let banner;
       if (t < 1.5) banner = { text: 'Three sensors watch the intersection — radar, LiDAR and a camera', tone: 'info' };
-      else if (t < 3.4) { [250, 356, 470].forEach((sx) => packets.push({ ...lerpPt({ x: sx, y: 132 }, G.hub, seg(t, 1.5, 3.4)), label: 'objects', tone: TONE.cyan })); banner = { text: 'Detected objects from every sensor stream into the V2X Hub, which fuses them', tone: 'info' }; }
+      else if (t < 3.4) { [[250, 'tracks'], [356, 'video'], [470, 'point cloud']].forEach(([sx, lbl]) => packets.push({ ...lerpPt({ x: sx, y: 132 }, G.hub, seg(t, 1.5, 3.4)), label: lbl, tone: TONE.cyan })); banner = { text: 'Each sensor streams its own data (tracks · video · point cloud) into the V2X Hub, which fuses them', tone: 'info' }; }
       else if (t < 6) { packets.push({ ...lerpPt(G.rsu, { x: ex, y: G.ewLaneY }, ((t - 3.4) % 1.3) / 1.3), label: 'SDSM', tone: TONE.cyan }); banner = { text: '⚠ The Hub broadcasts an SDSM (fused detections) — the car is warned of the pedestrian', tone: 'warn' }; }
       else banner = { text: 'Sensor fusion via the V2X Hub — even unequipped road users get a voice', tone: 'ok' };
       return { layout: 'straightH', infra: 'rsu', hub: true, crosswalk: 470, cars, ped, sensors, packets, banner, waves: detect };
