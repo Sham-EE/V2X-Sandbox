@@ -101,14 +101,19 @@ eq(new Set(m.ALL_MSGS.map((k) => m.MSG_COLOR[k])).size, m.ALL_MSGS.length, 'ever
 ok(/point cloud/i.test(JSON.stringify(m.decodePacket('point cloud', {}))), 'LiDAR feed decodes to a point cloud');
 ok(/track/i.test(JSON.stringify(m.decodePacket('tracks', {}))), 'radar feed decodes to tracks');
 ok(/video|frame/i.test(JSON.stringify(m.decodePacket('video', {}))), 'camera feed decodes to video/frames');
-// each sensor feed has a two-stage explainer with the right domain nuance
+// each sensor feed has a full pipeline explainer (raw→…→transmitted) + where/setups
 ['point cloud', 'tracks', 'video'].forEach((k) => {
   const info = m.SENSOR_FEED_INFO[k];
-  ok(info && info.what && info.stages.length === 2 && info.transmitted && info.nuance, `${k} explainer has what/stages/transmitted/nuance`);
+  ok(info && info.what && info.stages.length >= 3 && info.where && info.setups.length === 2 && info.transmitted && info.nuance, `${k} explainer has what/stages(≥3)/where/setups/transmitted/nuance`);
 });
+ok(/ADC|analog-to-digital|data cube/i.test(JSON.stringify(m.SENSOR_FEED_INFO.tracks.stages)), 'radar names the ADC echo as the true raw data');
 ok(/doppler/i.test(m.SENSOR_FEED_INFO.tracks.nuance), 'radar explains Doppler velocity');
-ok(/no doppler|inferred|no.*doppler/i.test(m.SENSOR_FEED_INFO['point cloud'].nuance), 'LiDAR explains it has no Doppler');
+ok(/no doppler|inferred/i.test(m.SENSOR_FEED_INFO['point cloud'].nuance), 'LiDAR explains it has no Doppler');
 ok(/frame/i.test(m.SENSOR_FEED_INFO.video.what), 'camera explains frames vs video');
+// the where/setups explain on-device chip vs external computer (older/newer)
+['point cloud', 'tracks', 'video'].forEach((k) => {
+  ok(/on.?chip|on the sensor|inside|embed|soc|npu|edge|separate|central/i.test(m.SENSOR_FEED_INFO[k].where + JSON.stringify(m.SENSOR_FEED_INFO[k].setups)), `${k} says where processing happens`);
+});
 // world-context gating: SPaT/MAP/SSM need a signal; SDSM needs a sensor; SRM needs signal+priority
 const noSig = { signal: false, sensor: true, priority: false, network: false };
 const full = { signal: true, sensor: true, priority: true, network: true };

@@ -396,38 +396,57 @@ function decodePacket(msg, ctx) {
 }
 
 // Plain-language explainer for a raw sensor feed, shown in the packet inspector.
-// Every sensor has a two-stage pipeline (raw output → a processed object layer);
-// the important nuance is WHAT actually gets transmitted to the V2X Hub.
+// `stages` walks the full pipeline (true raw → … → the transmitted layer);
+// `where` says which chip/computer does the raw→processed step; `setups`
+// contrasts the typical on-sensor edge build with the newer centralized one.
 const SENSOR_FEED_INFO = {
   'point cloud': {
-    what: 'A LiDAR’s native output: a dense 3-D cloud of points, one per laser return. Each point is an (x, y, z) position with an intensity value — exact geometry, but no identity or object boundaries on its own.',
+    what: 'A LiDAR maps geometry by timing laser pulses. Its native output is a dense 3-D point cloud — each point an (x, y, z) position with intensity. Exact shape, but no identity until something classifies it.',
     stages: [
-      ['Raw · point cloud', 'Time-of-flight of each laser pulse becomes a 3-D point — hundreds of thousands per scan, centimetre-accurate, and it works in total darkness.'],
-      ['Processed · objects', 'A perception layer clusters the points and classifies them into discrete objects (vehicle / pedestrian / cyclist), tracking each across frames for velocity. This is where a point cloud becomes an object list.'],
+      ['1 · Returns → digitized (raw)', 'Each fired pulse’s reflected photons are detected and time-stamped; the true raw output is the digitized time-of-flight returns (some sensors expose an even rawer per-detector waveform/histogram).'],
+      ['2 · Point cloud', 'The returns are assembled into the 3-D (x, y, z + intensity) cloud — hundreds of thousands of points per scan, cm-accurate, works in the dark. Still pure geometry, no labels.'],
+      ['3 · Perception → objects', 'Clustering + classification + frame-to-frame tracking turn the cloud into an object list (class, position, size, velocity).'],
     ],
-    transmitted: 'Roadside deployments run perception at the edge (on the sensor or the V2X Hub) and forward the OBJECT LIST, not the raw cloud — a full cloud is hundreds of Mbps. The Hub fuses those objects into an SDSM.',
+    where: 'The point cloud itself is computed ON the sensor. PERCEPTION (clustering/classification) is compute-heavy and has traditionally run on a SEPARATE edge computer — a domain controller or the V2X Hub. Newer “smart LiDAR” embeds a perception SoC to output the object list directly.',
+    setups: [
+      ['Typical · sensor + edge computer', 'The LiDAR streams its point cloud to an external edge box (or the V2X Hub), which runs perception.'],
+      ['Newer · smart LiDAR', 'An on-board perception SoC classifies inside the device and outputs objects; some high-end rigs instead stream the raw cloud to central compute for low-level fusion.'],
+    ],
+    transmitted: 'Roadside deployments forward the OBJECT LIST, not the raw cloud (a full cloud is hundreds of Mbps). The Hub fuses those objects into an SDSM.',
     nuanceLabel: 'Velocity',
-    nuance: 'LiDAR has no Doppler, so speed is inferred by following an object across successive frames — unlike radar, which measures it directly.',
+    nuance: 'LiDAR has no Doppler, so speed is inferred by following an object across frames — unlike radar, which measures it directly.',
   },
   tracks: {
-    what: 'A radar’s higher-level output: discrete tracked objects, each with an ID, position, velocity, heading and estimated size. Crucially, tracks are NOT the radar’s raw output — they come from a tracking layer built on top of the radar point cloud.',
+    what: 'A radar’s highest-level output: discrete tracked objects (ID, position, velocity, heading, size). Tracks are NOT the raw radar data — the raw data sits two stages below them.',
     stages: [
-      ['Raw · point cloud', 'Reflections with range, azimuth (and elevation on 4-D radar), radial velocity from Doppler, and power/SNR. Noisy, with no defined object boundaries.'],
-      ['Processed · tracks', 'A tracker (e.g. TI’s GTRACK, or a Kalman-filter clusterer) groups reflections into localized objects and follows each over time — giving actionable metadata: ID, position, velocity, direction, dimensions.'],
+      ['1 · Echo → ADC (true raw)', 'The received echo is mixed to a beat signal and digitized by an Analog-to-Digital Converter into raw samples — the “radar data cube”. This is the true RAW radar data: an unprocessed digitized echo, high-bandwidth and unusable as-is.'],
+      ['2 · Point cloud (semi-processed)', 'DSP runs range + Doppler + angle FFTs, then CFAR detection, to extract reflections: range, azimuth (elevation on 4-D radar), radial velocity (Doppler) and SNR. Already processed — this is NOT the raw echo.'],
+      ['3 · Tracks', 'A tracker (e.g. TI’s GTRACK, or a Kalman clusterer) groups the point cloud into localized objects and follows each over time → ID, position, velocity, direction, dimensions.'],
     ],
-    transmitted: 'A modern imaging radar can be configured to output the raw point cloud, the processed tracks, or both at once. For infrastructure detection the tracks are what’s useful; the Hub fuses them into an SDSM.',
+    where: 'Most ITS/automotive radars are a “radar-on-chip” SoC (e.g. TI AWR/IWR, NXP): RF front-end, ADC, DSP and an MCU are integrated, so the FFT/CFAR (point cloud) and even the tracker run INSIDE the sensor. It outputs a point cloud or tracks over a low-bandwidth link (CAN/Ethernet).',
+    setups: [
+      ['Typical · edge on-chip', 'The chip in the sensor does everything and emits tracks (or a point cloud). Low bandwidth out, self-contained.'],
+      ['Newer · centralized raw fusion', 'High-res / 4-D imaging radar & software-defined vehicles make the sensor a “satellite” that streams RAW ADC over automotive Ethernet to a central compute unit doing low-level (raw-data) fusion — more accurate/flexible, but needs big bandwidth + a central processor.'],
+    ],
+    transmitted: 'Configurable — raw cloud, tracks, or both. For infrastructure detection the tracks go to the V2X Hub, which fuses them into an SDSM.',
     nuanceLabel: 'Velocity',
-    nuance: 'Radar measures radial velocity DIRECTLY from the Doppler shift — its signature strength, and why it excels at speed / dilemma-zone detection in any weather.',
+    nuance: 'Radar measures radial velocity DIRECTLY from the Doppler shift — its signature strength, ideal for speed / dilemma-zone detection in any weather.',
   },
   video: {
     what: 'A camera captures FRAMES — individual images — at a frame rate (e.g. 30 fps). “Video” is just that sequence of frames, usually H.264/H.265-compressed when it’s streamed.',
     stages: [
-      ['Raw · frames', 'Each frame is a 2-D image (e.g. 1920×1080) — rich appearance, colour and text (plates, signs), but no native depth.'],
-      ['Processed · detections', 'An edge AI runs inference on each frame → bounding boxes → classified, tracked objects, plus events like red-light-running or wrong-way driving.'],
+      ['1 · Sensor readout (raw)', 'The CMOS imager’s raw (Bayer) readout is turned by an ISP into a viewable frame. The true raw is that uncompressed sensor readout.'],
+      ['2 · Frames / video', 'A sequence of 2-D images (e.g. 1920×1080), compressed to H.264/H.265 when transmitted. Rich colour/appearance/text — but no native depth.'],
+      ['3 · Detection (edge AI)', 'Per-frame inference → bounding boxes → classified, tracked objects, plus events (red-light-running, wrong-way).'],
     ],
-    transmitted: 'For V2X the camera sends the DETECTION METADATA per frame (objects / boxes / classes), not raw pixels — that keeps bandwidth low. Raw or compressed video is often ALSO streamed, but to a TMC for human operators, not into the safety message. The Hub fuses the detections into an SDSM.',
+    where: 'Traditional cameras are “dumb” — they stream video/frames to a SEPARATE processor (an edge box or the V2X Hub) that runs the CV/AI. Newer “AI cameras” embed an NPU/AI SoC INSIDE the camera that runs inference and outputs detection metadata directly.',
+    setups: [
+      ['Typical · camera + edge computer', 'The camera streams frames/video; an external processor detects and classifies.'],
+      ['Newer · smart / AI camera', 'An on-board NPU does the detection in the device; only metadata leaves it (raw video may still go to a TMC for humans).'],
+    ],
+    transmitted: 'For V2X the camera sends DETECTION METADATA per frame (objects/classes/events), not raw pixels — low bandwidth. Raw/compressed video, if sent, goes to a TMC for operators. The Hub fuses the detections into an SDSM.',
     nuanceLabel: 'Depth',
-    nuance: 'A single camera has no true depth; distance is estimated from scene geometry (or a second/stereo camera). LiDAR and radar are what give the metric position.',
+    nuance: 'A single camera has no true depth; distance is estimated from scene geometry (or a stereo/second camera). LiDAR and radar give the metric position.',
   },
 };
 
@@ -1409,10 +1428,23 @@ function WorldBuilderTab({ openGlossary }) {
                     <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-1">What this data is</div>
                     <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 space-y-2.5">
                       <p className="text-[12px] leading-relaxed text-slate-300">{info.what}</p>
+                      <div className="text-[9px] uppercase tracking-widest text-slate-500 pt-0.5">Pipeline · raw → transmitted</div>
                       <div className="space-y-1.5">
                         {info.stages.map(([label, text], i) => (
                           <div key={i} className="flex gap-2">
                             <span className="shrink-0 h-fit rounded bg-neon-cyan/15 text-neon-cyan text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5">{label}</span>
+                            <span className="text-[11px] leading-relaxed text-slate-400">{text}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="rounded-md border border-neon-violet/30 bg-neon-violet/5 p-2">
+                        <div className="text-[9px] uppercase tracking-widest text-neon-violet mb-0.5">Where it’s processed</div>
+                        <p className="text-[11px] leading-relaxed text-slate-300">{info.where}</p>
+                      </div>
+                      <div className="space-y-1">
+                        {info.setups.map(([label, text], i) => (
+                          <div key={i} className="flex gap-2">
+                            <span className={'shrink-0 h-fit rounded text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 ' + (i === 0 ? 'bg-zinc-700/60 text-slate-300' : 'bg-neon-green/15 text-neon-green')}>{label}</span>
                             <span className="text-[11px] leading-relaxed text-slate-400">{text}</span>
                           </div>
                         ))}
