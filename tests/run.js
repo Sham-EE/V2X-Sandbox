@@ -25,7 +25,7 @@ const renders = (el, msg) => { try { RS.renderToStaticMarkup(el); pass++; } catc
 function loadApp() {
   const jsx = fs.readFileSync(path.join(ROOT, 'src/app.jsx'), 'utf8').replace(/ReactDOM\.createRoot[\s\S]*$/, '');
   const code = Babel.transform(jsx, { presets: ['react'] }).code;
-  const names = 'App,WorldBuilderTab,UseCasesTab,GlossaryTab,AnatomyTab,CabinetDiagram,RsuDiagram,ObuDiagram,FirstRun,QuizTab,MiniScene,DeviceArt,SCENARIOS,QUIZ,GLOSSARY,TYPES,MODELS,ALL_MSGS,MSG_COLOR,linkStreams,decodePacket,liveXY,connKind,isVehicle,isSensor,canRequestPriority,backhaulKbps,glossaryTermFor,validCabPair,findGlossaryItem';
+  const names = 'App,WorldBuilderTab,UseCasesTab,GlossaryTab,AnatomyTab,CabinetDiagram,RsuDiagram,ObuDiagram,FirstRun,QuizTab,MiniScene,DeviceArt,SCENARIOS,QUIZ,GLOSSARY,TYPES,MODELS,ALL_MSGS,MSG_COLOR,SENSOR_FEED_INFO,linkStreams,decodePacket,liveXY,connKind,isVehicle,isSensor,canRequestPriority,backhaulKbps,glossaryTermFor,validCabPair,findGlossaryItem';
   const factory = new Function('React', 'ReactDOM', 'window', 'document', 'performance', 'requestAnimationFrame', 'cancelAnimationFrame', 'localStorage', code + `\n;return {${names}};`);
   const win = { innerWidth: 1440, addEventListener() {}, removeEventListener() {}, location: { href: 'file:///x', hash: '' }, history: { replaceState() {} } };
   const ls = { getItem: () => null, setItem() {}, removeItem() {} };
@@ -101,6 +101,14 @@ eq(new Set(m.ALL_MSGS.map((k) => m.MSG_COLOR[k])).size, m.ALL_MSGS.length, 'ever
 ok(/point cloud/i.test(JSON.stringify(m.decodePacket('point cloud', {}))), 'LiDAR feed decodes to a point cloud');
 ok(/track/i.test(JSON.stringify(m.decodePacket('tracks', {}))), 'radar feed decodes to tracks');
 ok(/video|frame/i.test(JSON.stringify(m.decodePacket('video', {}))), 'camera feed decodes to video/frames');
+// each sensor feed has a two-stage explainer with the right domain nuance
+['point cloud', 'tracks', 'video'].forEach((k) => {
+  const info = m.SENSOR_FEED_INFO[k];
+  ok(info && info.what && info.stages.length === 2 && info.transmitted && info.nuance, `${k} explainer has what/stages/transmitted/nuance`);
+});
+ok(/doppler/i.test(m.SENSOR_FEED_INFO.tracks.nuance), 'radar explains Doppler velocity');
+ok(/no doppler|inferred|no.*doppler/i.test(m.SENSOR_FEED_INFO['point cloud'].nuance), 'LiDAR explains it has no Doppler');
+ok(/frame/i.test(m.SENSOR_FEED_INFO.video.what), 'camera explains frames vs video');
 // world-context gating: SPaT/MAP/SSM need a signal; SDSM needs a sensor; SRM needs signal+priority
 const noSig = { signal: false, sensor: true, priority: false, network: false };
 const full = { signal: true, sensor: true, priority: true, network: true };

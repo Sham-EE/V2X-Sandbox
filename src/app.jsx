@@ -384,9 +384,9 @@ function decodePacket(msg, ctx) {
     SSM: { messageId: 'SSM', requestId: 41, status: 'granted', signalGroup: 4 },
     TIM: { messageId: 'TIM', advisory: 'reduced speed / work zone', advisorySpeed_kph: 45, appliesTo: 'lane 2, next 300 m' },
     SDSM: { messageId: 'SDSM', standard: 'SAE J3224', source: 'RSU / V2X Hub', objectCount: 3, objects: [{ id: 17, type: 'pedestrian', lat: 42.30902, lon: -83.06972, speed_mps: 1.3 }, { id: 21, type: 'vehicle', speed_mps: 12.8, heading_deg: 271 }], note: 'shares infrastructure-detected objects with vehicles' },
-    'point cloud': { messageId: 'LiDAR point cloud', kind: 'proprietary sensor feed (not OTA)', sensor: 'LiDAR', pointsPerScan: '~131,072', scanRate_hz: 10, rangeAccuracy_cm: '±2', note: '3-D returns → object detection; fused by the Hub into an SDSM' },
-    tracks: { messageId: 'radar tracks', kind: 'proprietary sensor feed (not OTA)', sensor: 'radar (mmWave)', trackList: [{ id: 3, range_m: 82, speed_mps: 25.6, azimuth_deg: -4 }, { id: 5, range_m: 140, speed_mps: 13.1, azimuth_deg: 2 }], weather: 'all-weather', note: 'range/speed/angle per object; fused into an SDSM' },
-    video: { messageId: 'camera video / detections', kind: 'proprietary sensor feed (not OTA)', sensor: 'AI video / thermal', resolution: '1920×1080', fps: 30, classifies: ['vehicle', 'pedestrian', 'cyclist'], events: ['red-light-running', 'wrong-way'], note: 'frames + classifications; fused into an SDSM' },
+    'point cloud': { messageId: 'LiDAR point cloud', kind: 'proprietary sensor feed (not OTA)', sensor: 'LiDAR', stage: 'RAW sensor output', pointsPerScan: '~131,072', scanRate_hz: 10, perPoint: { x_m: 2.41, y_m: -8.13, z_m: 0.92, intensity: 0.37 }, rangeAccuracy_cm: '±2', velocity: 'inferred across frames (LiDAR has no Doppler)', semantics: 'none — pure geometry until a perception layer classifies it' },
+    tracks: { messageId: 'radar tracks', kind: 'proprietary sensor feed (not OTA)', sensor: 'radar (mmWave)', stage: 'PROCESSED object layer (built on the radar point cloud)', tracker: 'GTRACK / Kalman clusterer', trackList: [{ id: 3, range_m: 82, speed_mps: 25.6, azimuth_deg: -4, class: 'vehicle' }, { id: 5, range_m: 140, speed_mps: 13.1, azimuth_deg: 2, class: 'vehicle' }], velocity: 'measured DIRECTLY from Doppler', weather: 'all-weather' },
+    video: { messageId: 'camera video / detections', kind: 'proprietary sensor feed (not OTA)', sensor: 'AI video / thermal', capture: 'frames (images) @ 30 fps', frame: '1920×1080', encoding: 'H.264/H.265 when streamed', perFrameAI: { boxes: [{ class: 'pedestrian', conf: 0.94 }, { class: 'vehicle', conf: 0.98 }], events: ['red-light-running'] }, transmitted: 'detection metadata per frame (raw video → TMC for humans, not the safety msg)' },
     objects: { messageId: 'detected objects', kind: 'proprietary sensor feed (not OTA)', from: 'LiDAR / radar / camera', list: [{ id: 17, class: 'pedestrian', x_m: 2.4, y_m: -8.1, v_mps: 1.3 }, { id: 21, class: 'vehicle', v_mps: 12.8 }], note: 'fused by the V2X Hub → broadcast as an SDSM' },
     phase: { control: 'NTCIP 1202 phase/timing (not a J2735 radio message)', phase: 2, state: 'GREEN', greenTime_s: 12 },
     data: { note: 'generic link payload' },
@@ -394,6 +394,42 @@ function decodePacket(msg, ctx) {
   const rawFeed = msg === 'phase' || msg === 'data' || msg === 'objects' || msg === 'point cloud' || msg === 'tracks' || msg === 'video';
   return rawFeed ? base : { ...base, security: sec };
 }
+
+// Plain-language explainer for a raw sensor feed, shown in the packet inspector.
+// Every sensor has a two-stage pipeline (raw output → a processed object layer);
+// the important nuance is WHAT actually gets transmitted to the V2X Hub.
+const SENSOR_FEED_INFO = {
+  'point cloud': {
+    what: 'A LiDAR’s native output: a dense 3-D cloud of points, one per laser return. Each point is an (x, y, z) position with an intensity value — exact geometry, but no identity or object boundaries on its own.',
+    stages: [
+      ['Raw · point cloud', 'Time-of-flight of each laser pulse becomes a 3-D point — hundreds of thousands per scan, centimetre-accurate, and it works in total darkness.'],
+      ['Processed · objects', 'A perception layer clusters the points and classifies them into discrete objects (vehicle / pedestrian / cyclist), tracking each across frames for velocity. This is where a point cloud becomes an object list.'],
+    ],
+    transmitted: 'Roadside deployments run perception at the edge (on the sensor or the V2X Hub) and forward the OBJECT LIST, not the raw cloud — a full cloud is hundreds of Mbps. The Hub fuses those objects into an SDSM.',
+    nuanceLabel: 'Velocity',
+    nuance: 'LiDAR has no Doppler, so speed is inferred by following an object across successive frames — unlike radar, which measures it directly.',
+  },
+  tracks: {
+    what: 'A radar’s higher-level output: discrete tracked objects, each with an ID, position, velocity, heading and estimated size. Crucially, tracks are NOT the radar’s raw output — they come from a tracking layer built on top of the radar point cloud.',
+    stages: [
+      ['Raw · point cloud', 'Reflections with range, azimuth (and elevation on 4-D radar), radial velocity from Doppler, and power/SNR. Noisy, with no defined object boundaries.'],
+      ['Processed · tracks', 'A tracker (e.g. TI’s GTRACK, or a Kalman-filter clusterer) groups reflections into localized objects and follows each over time — giving actionable metadata: ID, position, velocity, direction, dimensions.'],
+    ],
+    transmitted: 'A modern imaging radar can be configured to output the raw point cloud, the processed tracks, or both at once. For infrastructure detection the tracks are what’s useful; the Hub fuses them into an SDSM.',
+    nuanceLabel: 'Velocity',
+    nuance: 'Radar measures radial velocity DIRECTLY from the Doppler shift — its signature strength, and why it excels at speed / dilemma-zone detection in any weather.',
+  },
+  video: {
+    what: 'A camera captures FRAMES — individual images — at a frame rate (e.g. 30 fps). “Video” is just that sequence of frames, usually H.264/H.265-compressed when it’s streamed.',
+    stages: [
+      ['Raw · frames', 'Each frame is a 2-D image (e.g. 1920×1080) — rich appearance, colour and text (plates, signs), but no native depth.'],
+      ['Processed · detections', 'An edge AI runs inference on each frame → bounding boxes → classified, tracked objects, plus events like red-light-running or wrong-way driving.'],
+    ],
+    transmitted: 'For V2X the camera sends the DETECTION METADATA per frame (objects / boxes / classes), not raw pixels — that keeps bandwidth low. Raw or compressed video is often ALSO streamed, but to a TMC for human operators, not into the safety message. The Hub fuses the detections into an SDSM.',
+    nuanceLabel: 'Depth',
+    nuance: 'A single camera has no true depth; distance is estimated from scene geometry (or a second/stereo camera). LiDAR and radar are what give the metric position.',
+  },
+};
 
 // Explanations shown in the connection detail panel.
 const CONN_DESC = {
@@ -1368,6 +1404,24 @@ function WorldBuilderTab({ openGlossary }) {
               </header>
               <div className="flex-1 overflow-auto p-4 space-y-3">
                 {faultText && <div className="rounded-lg border border-red-700/60 bg-red-500/10 p-2.5 text-[12px] text-red-200">⚠ {faultText}</div>}
+                {SENSOR_FEED_INFO[pk.msg] && (() => { const info = SENSOR_FEED_INFO[pk.msg]; return (
+                  <div>
+                    <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-1">What this data is</div>
+                    <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 space-y-2.5">
+                      <p className="text-[12px] leading-relaxed text-slate-300">{info.what}</p>
+                      <div className="space-y-1.5">
+                        {info.stages.map(([label, text], i) => (
+                          <div key={i} className="flex gap-2">
+                            <span className="shrink-0 h-fit rounded bg-neon-cyan/15 text-neon-cyan text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5">{label}</span>
+                            <span className="text-[11px] leading-relaxed text-slate-400">{text}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <p className="text-[11px] leading-relaxed text-slate-400"><span className="text-slate-300 font-semibold">Transmitted: </span>{info.transmitted}</p>
+                      <p className="text-[11px] leading-relaxed text-slate-400"><span className="text-slate-300 font-semibold">{info.nuanceLabel}: </span>{info.nuance}</p>
+                    </div>
+                  </div>
+                ); })()}
                 <div>
                   <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-1">Decoded payload (representative)</div>
                   <div className="rounded-lg border border-zinc-800 bg-black/60 p-3"><pre className="font-mono text-[12px] leading-relaxed whitespace-pre-wrap break-words"><JsonView data={decodePacket(pk.msg, { secure: pk.secure, formatOk: pk.formatOk, vehType: pk.vehType })} /></pre></div>
