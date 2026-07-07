@@ -1429,11 +1429,11 @@ function WorldBuilderTab({ openGlossary }) {
                     <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 space-y-2.5">
                       <p className="text-[12px] leading-relaxed text-slate-300">{info.what}</p>
                       <div className="text-[9px] uppercase tracking-widest text-slate-500 pt-0.5">Pipeline · raw → transmitted</div>
-                      <div className="space-y-1.5">
+                      <div className="space-y-2">
                         {info.stages.map(([label, text], i) => (
-                          <div key={i} className="flex gap-2">
-                            <span className="shrink-0 h-fit rounded bg-neon-cyan/15 text-neon-cyan text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5">{label}</span>
-                            <span className="text-[11px] leading-relaxed text-slate-400">{text}</span>
+                          <div key={i} className="border-l-2 border-neon-cyan/40 pl-2.5">
+                            <div className="text-[10px] font-bold uppercase tracking-wide text-neon-cyan">{label}</div>
+                            <div className="text-[11px] leading-relaxed text-slate-400">{text}</div>
                           </div>
                         ))}
                       </div>
@@ -1441,11 +1441,11 @@ function WorldBuilderTab({ openGlossary }) {
                         <div className="text-[9px] uppercase tracking-widest text-neon-violet mb-0.5">Where it’s processed</div>
                         <p className="text-[11px] leading-relaxed text-slate-300">{info.where}</p>
                       </div>
-                      <div className="space-y-1">
+                      <div className="space-y-2">
                         {info.setups.map(([label, text], i) => (
-                          <div key={i} className="flex gap-2">
-                            <span className={'shrink-0 h-fit rounded text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 ' + (i === 0 ? 'bg-zinc-700/60 text-slate-300' : 'bg-neon-green/15 text-neon-green')}>{label}</span>
-                            <span className="text-[11px] leading-relaxed text-slate-400">{text}</span>
+                          <div key={i} className={'border-l-2 pl-2.5 ' + (i === 0 ? 'border-zinc-600' : 'border-neon-green/50')}>
+                            <div className={'text-[10px] font-bold uppercase tracking-wide ' + (i === 0 ? 'text-slate-300' : 'text-neon-green')}>{label}</div>
+                            <div className="text-[11px] leading-relaxed text-slate-400">{text}</div>
                           </div>
                         ))}
                       </div>
