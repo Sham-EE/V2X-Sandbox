@@ -67,8 +67,11 @@ eq(m.connKind('obu', 'obu'), 'v2v', 'obu-obu');
 eq(m.connKind('ev', 'ev'), 'v2v', 'ev-ev');
 eq(m.connKind('ped', 'rsu'), 'v2p', 'ped-rsu');
 eq(m.connKind('tc', 'signal'), 'signal', 'tc-signal');
-eq(m.connKind('lidar', 'hub'), 'sensor', 'lidar-hub = sensor feed');
-eq(m.connKind('camera', 'tc'), 'sensor', 'camera-tc = sensor feed');
+eq(m.connKind('lidar', 'hub'), 'sensor', 'lidar-hub = sensor data feed');
+eq(m.connKind('camera', 'tc'), 'sensor', 'camera-tc = sensor data feed');
+eq(m.connKind('lidar', 'obu'), 'detect', 'sensor-car = detecting the target');
+eq(m.connKind('ev', 'radar'), 'detect', 'sensor-EV = detecting the target');
+eq(m.connKind('camera', 'ped'), 'detect', 'sensor-ped = detecting the target');
 eq(m.connKind('hub', 'rsu'), 'ethernet', 'hub-rsu = backhaul');
 eq(m.connKind('hub', 'tc'), 'ethernet', 'hub-tc = backhaul');
 eq(m.connKind('obu', 'celltower'), 'cellular', 'vehicle-tower = cellular Uu');
@@ -94,6 +97,13 @@ eq(L(m.linkStreams(cam, hub, 'both', {}, 'rsu')), ['video'], 'camera → hub = v
 eq(L(m.linkStreams({ type: 'lidar', x: 0, y: 0 }, hub, 'both', {}, 'rsu')), ['point cloud'], 'LiDAR → hub = point-cloud feed');
 eq(L(m.linkStreams({ type: 'radar', x: 0, y: 0 }, hub, 'both', {}, 'rsu')), ['tracks'], 'radar → hub = tracks feed');
 eq(L(m.linkStreams(cam, hub, 'fwd', {}, 'rsu')), [], 'sensor feed is upstream-only (no fwd)');
+// sensor → road user = a DETECTION (data flows target → sensor, not to the vehicle)
+{
+  const car2 = { type: 'obu', x: 200, y: 0 }, lidar2 = { type: 'lidar', x: 0, y: 0 };
+  const det = m.linkStreams(lidar2, car2, 'both', {}, 'rsu');
+  eq(L(det), ['detection'], 'sensor-car link = a detection');
+  ok(det[0].from.x === car2.x && det[0].to.x === lidar2.x, 'detection flows target → sensor (into the sensor)');
+}
 // each message now has its own hue — no two share a color
 ok(m.ALL_MSGS.every((k) => typeof m.MSG_COLOR[k] === 'string'), 'every message has a color');
 eq(new Set(m.ALL_MSGS.map((k) => m.MSG_COLOR[k])).size, m.ALL_MSGS.length, 'every message has a UNIQUE color');
