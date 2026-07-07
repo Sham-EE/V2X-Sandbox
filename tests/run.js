@@ -88,6 +88,13 @@ eq(L(m.linkStreams(bus, rsu, 'rev', {}, 'rsu')), ['BSM', 'SRM'], 'bus up = BSM +
 ok(!m.linkStreams(tc, rsu, 'fwd', {}, 'rsu').some((s) => s.label === 'MAP'), 'MAP@rsu: not on TC-RSU wire');
 ok(m.linkStreams(tc, rsu, 'fwd', {}, 'tc').some((s) => s.label === 'MAP'), 'MAP@tc: on TC-RSU wire');
 ok(m.linkStreams(rsu, car, 'fwd', {}, 'rsu').some((s) => s.label === 'MAP'), 'MAP always broadcast over the air');
+// MAP is static: stored on the RSU it store-and-repeats OTA even with NO TC;
+// stored on the TC it needs the TC present to source it.
+{
+  const noTc = { signal: false, sensor: false, priority: false, network: false };
+  ok(m.linkStreams(rsu, car, 'fwd', {}, 'rsu', noTc).some((s) => s.label === 'MAP'), 'MAP@rsu broadcasts OTA with no TC (store-and-repeat)');
+  ok(!m.linkStreams(rsu, car, 'fwd', {}, 'tc', noTc).some((s) => s.label === 'MAP'), 'MAP@tc needs a TC to source it');
+}
 eq(L(m.linkStreams(car, car, 'both', {}, 'rsu')), ['BSM', 'BSM'], 'v2v = BSM both ways');
 eq(L(m.linkStreams(ped, rsu, 'both', {}, 'rsu')), ['PSM', 'SPaT'], 'v2p rsu = PSM up + SPaT down');
 eq(L(m.linkStreams(ped, car, 'both', {}, 'rsu')), ['BSM', 'PSM'], 'v2p vehicle = PSM up + BSM down');
@@ -127,10 +134,13 @@ ok(/frame/i.test(m.SENSOR_FEED_INFO.video.what), 'camera explains frames vs vide
 // world-context gating: SPaT/MAP/SSM need a signal; SDSM needs a sensor; SRM needs signal+priority
 const noSig = { signal: false, sensor: true, priority: false, network: false };
 const full = { signal: true, sensor: true, priority: true, network: true };
-eq(L(m.linkStreams(rsu, car, 'fwd', {}, 'rsu', noSig)), ['SDSM'], 'no TC → no SPaT/SSM; a sensor → SDSM');
+eq(L(m.linkStreams(rsu, car, 'fwd', {}, 'rsu', noSig)), ['MAP', 'SDSM'], 'no TC → no SPaT/SSM; RSU still store-and-repeats MAP + broadcasts SDSM');
 ok(!m.linkStreams(rsu, car, 'fwd', {}, 'rsu', noSig).some((s) => s.label === 'SPaT'), 'no signal controller → no SPaT');
 ok(m.linkStreams(rsu, car, 'fwd', {}, 'rsu', full).some((s) => s.label === 'SPaT'), 'signal present → SPaT broadcast');
 ok(m.linkStreams(rsu, car, 'fwd', {}, 'rsu', full).some((s) => s.label === 'SDSM'), 'sensor present → SDSM broadcast');
+// SDSM comes from the fusion Hub over the wire — never the TC
+ok(m.linkStreams(hub, rsu, 'fwd', {}, 'rsu', { signal: false, sensor: true, priority: false, network: false }).some((s) => s.label === 'SDSM'), 'SDSM flows Hub → RSU');
+ok(!m.linkStreams(tc, rsu, 'fwd', {}, 'rsu', full).some((s) => s.label === 'SDSM'), 'the TC never sends an SDSM to the RSU');
 eq(L(m.linkStreams(ev, rsu, 'rev', {}, 'rsu', { signal: false, sensor: false, priority: true, network: false })), ['BSM'], 'EV but no signal → no SRM (nothing to request from)');
 ok(m.linkStreams(ev, rsu, 'rev', {}, 'rsu', full).some((s) => s.label === 'SRM'), 'EV + signal + priority → SRM');
 ok(m.ALL_MSGS.includes('SDSM'), 'SDSM is a toggleable message');
@@ -175,6 +185,8 @@ ok(m.findGlossaryItem('nope-not-a-term') == null, 'findGlossaryItem returns null
 const refGroup = m.GLOSSARY.find((g) => /References/i.test(g.group));
 ok(refGroup && refGroup.items.length >= 4, 'glossary has a References & Further Reading group');
 ok(refGroup && refGroup.items.every((it) => Array.isArray(it.links) && it.links.every((l) => l.label && /^https:\/\//.test(l.url))), 'every reference has https links with labels');
+// the RSU store-and-repeat / immediate-forward concept is documented
+ok(m.GLOSSARY.some((g) => g.items.some((it) => /store-and-repeat/i.test(it.term + it.def) && /immediate-forward/i.test(it.def))), 'glossary explains store-and-repeat / immediate-forward RSU modes');
 
 // ---------- 7. vehicle roles + cabinet wiring ----------
 console.log('• roles + cabinet wiring');

@@ -342,11 +342,16 @@ function linkStreams(a, b, dir, enabled, mapStore, ctx) {
   const wireless = kind === 'wireless';
   const [s, d] = orientLink(a, b);
   const down = [];
-  if (c.signal) down.push('SPaT');
-  // MAP (intersection geometry): broadcast over the air whenever there's a
-  // signal; on the cabinet wire only when MAP is stored on the TC.
-  if (c.signal && (wireless || mapStore === 'tc')) down.push('MAP');
-  if (c.sensor) down.push('SDSM');                 // fused sensor detections
+  if (c.signal) down.push('SPaT');   // live phase — needs the controller (immediate-forward from the TC)
+  // MAP (intersection geometry) is STATIC. The RSU broadcasts it over the air
+  // whenever it can source it: stored locally (mapStore 'rsu') it store-and-
+  // repeats with no TC at all; stored on the TC it needs the TC present. On the
+  // cabinet wire MAP only rides when it's stored on (and streamed from) the TC.
+  const mapOta = mapStore === 'rsu' || c.signal;
+  if (wireless ? mapOta : (mapStore === 'tc' && c.signal)) down.push('MAP');
+  // SDSM is produced by the fusion node — the V2X Hub over the wire, or the RSU
+  // over the air — NOT the TC, which only does signal control.
+  if (c.sensor && (wireless || s.type === 'hub')) down.push('SDSM');
   if (c.network) down.push('TIM');                 // network-sourced advisories
   if (c.signal && c.priority) down.push('SSM');     // signal-status reply (only if priority can be requested)
   // Upstream: every vehicle sends BSM. An SRM only exists when there's a signal
@@ -485,12 +490,18 @@ const CONN_PIPELINE = {
 // MAP storage tradeoffs, surfaced in the Simulation panel.
 const MAP_INFO = {
   rsu: { title: 'MAP on the RSU (local)',
-         benefit: 'Low backhaul load & latency; keeps broadcasting even if the TC link drops. Standard for static geometry.',
+         mode: 'Store-and-repeat',
+         modeDesc: 'The RSU holds the static geometry and re-broadcasts it on a timer (~1 Hz) all on its own — no TC needed, so it keeps going even if the cabinet link drops. It never rides the backhaul wire.',
+         benefit: 'Low backhaul load & latency; broadcasts with or without a TC. Standard for static geometry.',
          draw: 'Provisioned per-RSU — changing lane geometry means re-flashing every unit (config-drift risk).' },
   tc:  { title: 'MAP on the TC (central)',
+         mode: 'Immediate-forward',
+         modeDesc: 'The TC streams MAP down the cabinet wire and the RSU forwards it out over the air — one source of truth, but MAP now rides the backhaul constantly and needs a healthy TC link.',
          benefit: 'Single source of truth — edit geometry once at the controller and it propagates to the RSU.',
          draw: 'Adds constant MAP traffic on the wire; needs a healthy TC link and a J2735-capable ATC.' },
 };
+// The two RSU broadcast modes — the concept underneath the MAP-storage choice.
+const RSU_MODE_NOTE = 'RSUs broadcast in two modes. STORE-AND-REPEAT: the RSU is loaded with a static message (MAP geometry, a TIM) and repeats it locally on a timer — no upstream feed needed. IMMEDIATE-FORWARD: a live stream from the TC (SPaT, which changes every second) is passed straight through and re-broadcast as it arrives. So SPaT is always immediate-forward (it needs the live controller); MAP can be either — store-and-repeat on the RSU, or immediate-forward from the TC.';
 
 /* =====================================================================
    2. UI PRIMITIVES
@@ -1527,9 +1538,14 @@ function WorldBuilderTab({ openGlossary }) {
                 <Segmented value={mapStore} onChange={setMapStore}
                   options={[{ value: 'rsu', label: 'RSU' }, { value: 'tc', label: 'TC' }]} />
                 <div className="mt-2 rounded-lg border border-zinc-800 bg-zinc-900/50 p-2.5">
-                  <div className="text-[12px] font-semibold text-slate-200">{MAP_INFO[mapStore].title}</div>
-                  <div className="mt-1 text-[11px] text-emerald-300/90"><span className="font-semibold">✔ </span>{MAP_INFO[mapStore].benefit}</div>
+                  <div className="flex items-center gap-2">
+                    <div className="text-[12px] font-semibold text-slate-200">{MAP_INFO[mapStore].title}</div>
+                    <span className="ml-auto rounded bg-neon-cyan/15 text-neon-cyan text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5">{MAP_INFO[mapStore].mode}</span>
+                  </div>
+                  <div className="mt-1 text-[11px] text-slate-400 leading-relaxed">{MAP_INFO[mapStore].modeDesc}</div>
+                  <div className="mt-1.5 text-[11px] text-emerald-300/90"><span className="font-semibold">✔ </span>{MAP_INFO[mapStore].benefit}</div>
                   <div className="mt-1 text-[11px] text-amber-300/90"><span className="font-semibold">✖ </span>{MAP_INFO[mapStore].draw}</div>
+                  <div className="mt-2 rounded-md border border-zinc-800 bg-black/30 p-2 text-[10px] leading-relaxed text-slate-500">{RSU_MODE_NOTE}</div>
                   {(() => { const kb = backhaulKbps(enabled, mapStore); const max = 20; return (
                     <div className="mt-2">
                       <div className="flex items-center justify-between text-[11px]"><span className="text-slate-400">Est. cabinet backhaul (downstream)</span><span className="font-mono text-slate-200">≈ {kb} kbps</span></div>
@@ -2682,6 +2698,7 @@ const GLOSSARY = [
     { term: 'Load Switch', def: 'A solid-state relay in the signal cabinet. The controller only emits low-voltage logic; the load switch takes that command and switches the actual field power (LED driver / 120 VAC) out to one signal channel. Power then runs through the cabinet terminals, underground conduit, and up the pole to the signal head — the TC never drives the LEDs directly.' },
     { term: 'Conflict Monitor (MMU)', def: 'The Malfunction Management Unit — an independent safety device in the cabinet that continuously watches the load-switch outputs. If it ever detects conflicting greens (or other faults), it overrides the controller and drops the intersection to flashing red.' },
     { term: 'Roadside Unit (RSU)', def: 'An ITS device mounted on roadside infrastructure (like a signal pole) that facilitates wireless communication between the traffic controller and nearby vehicles or pedestrians.' },
+    { term: 'RSU modes (store-and-repeat / immediate-forward)', def: 'How an RSU handles a message it broadcasts. STORE-AND-REPEAT: the RSU is loaded with a STATIC message — MAP intersection geometry, or a TIM — and re-broadcasts it locally on a timer (MAP ~1 Hz) with no upstream feed; it keeps going even if the controller link drops, and nothing rides the backhaul. IMMEDIATE-FORWARD: a LIVE stream from the TC — SPaT, which changes every second — is passed straight through and re-broadcast as it arrives. So SPaT is always immediate-forward (it needs the live controller); MAP can be either — store-and-repeat when the geometry lives on the RSU, or immediate-forward when it is streamed from the TC. This is exactly the trade-off behind the “MAP stored on RSU vs TC” control.' },
     { term: 'On-Board Unit (OBU)', def: "A hardware transceiver installed inside a vehicle that receives over-the-air messages from the RSU and broadcasts the vehicle's own real-time state." },
     { term: 'ADAS', def: 'Advanced Driver-Assistance System — the in-vehicle brain that fuses incoming V2X messages with onboard sensors (radar/camera/lidar) to warn the driver or actuate braking and steering.' },
     { term: 'Vehicle', def: 'The final node containing the central ADAS/CPU processing brain that pulls data from the OBU, coordinates sensor fusion with internal vehicle metrics, and acts on safety logic.' },
