@@ -25,7 +25,7 @@ const renders = (el, msg) => { try { RS.renderToStaticMarkup(el); pass++; } catc
 function loadApp() {
   const jsx = fs.readFileSync(path.join(ROOT, 'src/app.jsx'), 'utf8').replace(/ReactDOM\.createRoot[\s\S]*$/, '');
   const code = Babel.transform(jsx, { presets: ['react'] }).code;
-  const names = 'App,WorldBuilderTab,UseCasesTab,GlossaryTab,AnatomyTab,CabinetDiagram,RsuDiagram,ObuDiagram,FirstRun,QuizTab,MiniScene,DeviceArt,SCENARIOS,QUIZ,GLOSSARY,TYPES,MODELS,ALL_MSGS,MSG_COLOR,MSG_RECIPE,CATEGORIES,SENSOR_FEED_INFO,linkStreams,decodePacket,liveXY,connKind,isVehicle,isSensor,canRequestPriority,backhaulKbps,glossaryTermFor,validCabPair,findGlossaryItem';
+  const names = 'App,WorldBuilderTab,UseCasesTab,GlossaryTab,AnatomyTab,CabinetDiagram,RsuDiagram,ObuDiagram,FirstRun,QuizTab,MiniScene,DeviceArt,SCENARIOS,QUIZ,GLOSSARY,TYPES,MODELS,ALL_MSGS,MSG_COLOR,MSG_RECIPE,CATEGORIES,QUIZ_SECTIONS,SENSOR_FEED_INFO,linkStreams,decodePacket,liveXY,connKind,isVehicle,isSensor,canRequestPriority,backhaulKbps,glossaryTermFor,validCabPair,findGlossaryItem';
   const factory = new Function('React', 'ReactDOM', 'window', 'document', 'performance', 'requestAnimationFrame', 'cancelAnimationFrame', 'localStorage', code + `\n;return {${names}};`);
   const win = { innerWidth: 1440, addEventListener() {}, removeEventListener() {}, location: { href: 'file:///x', hash: '' }, history: { replaceState() {} } };
   const ls = { getItem: () => null, setItem() {}, removeItem() {} };
@@ -226,8 +226,15 @@ ok(m.SCENARIOS.find((s) => s.id === 'wwd').messages.includes('SDSM'), 'wrong-way
 
 // ---------- 9. quiz ----------
 console.log('• quiz');
-ok(m.QUIZ.length >= 10, `quiz question count (${m.QUIZ.length}) ≥ 10`);
+ok(m.QUIZ.length >= 30, `quiz question count (${m.QUIZ.length}) ≥ 30`);
 ok(m.QUIZ.every((q) => Array.isArray(q.options) && q.options.length >= 2 && typeof q.answer === 'number' && q.answer >= 0 && q.answer < q.options.length && q.explain), 'every question has valid options/answer/explanation');
+// every question belongs to a defined section, and each section has enough to test on
+const secIds = m.QUIZ_SECTIONS.map((s) => s.id);
+ok(m.QUIZ.every((q) => secIds.includes(q.cat)), 'every question has a valid section (cat)');
+ok(m.QUIZ_SECTIONS.every((s) => m.QUIZ.filter((q) => q.cat === s.id).length >= 4), 'every section has ≥ 4 questions');
+ok(m.QUIZ_SECTIONS.length >= 5, `quiz has ${m.QUIZ_SECTIONS.length} sections (≥ 5)`);
+// quiz launches from the header (a modal), not as a main nav tab
+renders(el(m.QuizTab, { onClose: noop }), 'QuizTab(modal, with onClose)');
 
 // ---------- 10. built artifact is offline & self-contained ----------
 console.log('• built index.html');
