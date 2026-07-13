@@ -25,7 +25,7 @@ const renders = (el, msg) => { try { RS.renderToStaticMarkup(el); pass++; } catc
 function loadApp() {
   const jsx = fs.readFileSync(path.join(ROOT, 'src/app.jsx'), 'utf8').replace(/ReactDOM\.createRoot[\s\S]*$/, '');
   const code = Babel.transform(jsx, { presets: ['react'] }).code;
-  const names = 'App,WorldBuilderTab,UseCasesTab,GlossaryTab,AnatomyTab,CabinetDiagram,RsuDiagram,ObuDiagram,FirstRun,QuizTab,MiniScene,DeviceArt,SCENARIOS,QUIZ,GLOSSARY,TYPES,MODELS,ALL_MSGS,MSG_COLOR,SENSOR_FEED_INFO,linkStreams,decodePacket,liveXY,connKind,isVehicle,isSensor,canRequestPriority,backhaulKbps,glossaryTermFor,validCabPair,findGlossaryItem';
+  const names = 'App,WorldBuilderTab,UseCasesTab,GlossaryTab,AnatomyTab,CabinetDiagram,RsuDiagram,ObuDiagram,FirstRun,QuizTab,MiniScene,DeviceArt,SCENARIOS,QUIZ,GLOSSARY,TYPES,MODELS,ALL_MSGS,MSG_COLOR,MSG_RECIPE,SENSOR_FEED_INFO,linkStreams,decodePacket,liveXY,connKind,isVehicle,isSensor,canRequestPriority,backhaulKbps,glossaryTermFor,validCabPair,findGlossaryItem';
   const factory = new Function('React', 'ReactDOM', 'window', 'document', 'performance', 'requestAnimationFrame', 'cancelAnimationFrame', 'localStorage', code + `\n;return {${names}};`);
   const win = { innerWidth: 1440, addEventListener() {}, removeEventListener() {}, location: { href: 'file:///x', hash: '' }, history: { replaceState() {} } };
   const ls = { getItem: () => null, setItem() {}, removeItem() {} };
@@ -144,6 +144,9 @@ ok(!m.linkStreams(tc, rsu, 'fwd', {}, 'rsu', full).some((s) => s.label === 'SDSM
 eq(L(m.linkStreams(ev, rsu, 'rev', {}, 'rsu', { signal: false, sensor: false, priority: true, network: false })), ['BSM'], 'EV but no signal → no SRM (nothing to request from)');
 ok(m.linkStreams(ev, rsu, 'rev', {}, 'rsu', full).some((s) => s.label === 'SRM'), 'EV + signal + priority → SRM');
 ok(m.ALL_MSGS.includes('SDSM'), 'SDSM is a toggleable message');
+// every toggleable message has a "how to make it appear" recipe (hover tip + inspector)
+ok(m.ALL_MSGS.every((mm) => m.MSG_RECIPE[mm] && m.MSG_RECIPE[mm].need && m.MSG_RECIPE[mm].why), 'every J2735 message has a MSG_RECIPE (need + why)');
+ok(/sensor|lock|detect/i.test(m.MSG_RECIPE.SDSM.need), 'SDSM recipe explains you must aim a sensor at a road user');
 ok(m.isSensor('lidar') && m.isSensor('radar') && m.isSensor('camera') && !m.isSensor('rsu'), 'isSensor');
 ok(m.MODELS.hub && m.MODELS.lidar && m.MODELS.radar && m.MODELS.camera, 'new devices have vendor spec sheets');
 ok(m.TYPES.hub && m.TYPES.mast && m.TYPES.lidar && m.TYPES.radar && m.TYPES.camera, 'new device types exist');

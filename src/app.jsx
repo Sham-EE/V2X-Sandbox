@@ -378,6 +378,20 @@ function backhaulKbps(enabled, mapStore) {
 // Cross-links from the sim to the Glossary.
 const MSG_GLOSSARY = { SPaT: 'SPaT (Signal Phase and Timing)', MAP: 'MAP (Intersection Geometry)', BSM: 'BSM (Basic Safety Message)', PSM: 'PSM (Personal Safety Message)', SRM: 'SRM / SSM', SSM: 'SRM / SSM', TIM: 'TIM (Traveler Information Message)', SDSM: 'SDSM (Sensor Data Sharing Message)' };
 const DEVICE_GLOSSARY = { tc: 'Traffic Controller (TC)', rsu: 'Roadside Unit (RSU)', obu: 'On-Board Unit (OBU)', ev: 'On-Board Unit (OBU)', bus: 'On-Board Unit (OBU)', ped: 'VRU (Vulnerable Road User)' };
+// Exactly how to make each J2735 message show up in the sim — the devices you
+// must place and wire. Surfaced on hover over the message toggles (with a live
+// ✓/✗ of whether the current world already qualifies) and in the packet
+// inspector. `need` = the recipe; `why` = what the message actually is.
+const MSG_RECIPE = {
+  SPaT: { need: 'Place a signal controller (TC) — or a signal head — and wire it to the RSU.', why: 'SPaT is the live phase the controller drives.' },
+  MAP:  { need: 'Just have an RSU on the canvas — it store-and-repeats the stored geometry (no TC needed).', why: 'MAP is the static intersection map, broadcast over the air.' },
+  TIM:  { need: 'Add a network source (TMC or cell tower) and link it toward the RSU/vehicle.', why: 'TIM carries network advisories — work zones, reduced speed.' },
+  SSM:  { need: 'Add a signal controller AND an authorized requester (an EV or bus).', why: 'SSM is the signal’s status reply to a priority request.' },
+  BSM:  { need: 'Add any vehicle to the canvas.', why: 'Every vehicle continuously broadcasts a BSM describing itself.' },
+  SRM:  { need: 'Add a signal controller AND an authorized requester (an EV or bus).', why: 'The SRM is that vehicle asking the signal for priority.' },
+  PSM:  { need: 'Add a pedestrian.', why: 'The VRU (or their phone) announces itself with a PSM.' },
+  SDSM: { need: 'Wire a sensor (LiDAR/radar/camera) to the RSU or Hub, then aim it at a road user — drag the sensor onto a car or pedestrian so it locks on.', why: 'SDSM shares DETECTED objects — no lock-on, no SDSM.' },
+};
 // Resolve a use-case message/label to a matching Glossary term (or null).
 function glossaryTermFor(label) {
   if (MSG_GLOSSARY[label]) return MSG_GLOSSARY[label];
@@ -400,7 +414,7 @@ function decodePacket(msg, ctx) {
     SRM: { messageId: 'SRM', requestor: ctx.vehType === 'bus' ? 'publicTransport (transit)' : 'emergency (fire/EMS/police)', requestType: ctx.vehType === 'bus' ? 'priority (extend green)' : 'preemption (immediate green)', requestedSignalGroup: 4, eta_s: 6.5 },
     SSM: { messageId: 'SSM', requestId: 41, status: 'granted', signalGroup: 4 },
     TIM: { messageId: 'TIM', advisory: 'reduced speed / work zone', advisorySpeed_kph: 45, appliesTo: 'lane 2, next 300 m' },
-    SDSM: { messageId: 'SDSM', standard: 'SAE J3224', source: 'RSU / V2X Hub', objectCount: 3, objects: [{ id: 17, type: 'pedestrian', lat: 42.30902, lon: -83.06972, speed_mps: 1.3 }, { id: 21, type: 'vehicle', speed_mps: 12.8, heading_deg: 271 }], note: 'shares infrastructure-detected objects with vehicles' },
+    SDSM: { messageId: 'SDSM', standard: 'SAE J3224', source: 'RSU / V2X Hub', objectCount: 3, objects: [{ id: 17, type: 'pedestrian', lat: 42.30902, lon: -83.06972, speed_mps: 1.3 }, { id: 21, type: 'vehicle', speed_mps: 12.8, heading_deg: 271 }], note: 'shares infrastructure-detected objects with vehicles — only exists once a sensor is locked onto a road user (no detection, no SDSM)' },
     'point cloud': { messageId: 'LiDAR point cloud', kind: 'proprietary sensor feed (not OTA)', sensor: 'LiDAR', stage: 'RAW sensor output', pointsPerScan: '~131,072', scanRate_hz: 10, perPoint: { x_m: 2.41, y_m: -8.13, z_m: 0.92, intensity: 0.37 }, rangeAccuracy_cm: '±2', velocity: 'inferred across frames (LiDAR has no Doppler)', semantics: 'none — pure geometry until a perception layer classifies it' },
     tracks: { messageId: 'radar tracks', kind: 'proprietary sensor feed (not OTA)', sensor: 'radar (mmWave)', stage: 'PROCESSED object layer (built on the radar point cloud)', tracker: 'GTRACK / Kalman clusterer', trackList: [{ id: 3, range_m: 82, speed_mps: 25.6, azimuth_deg: -4, class: 'vehicle' }, { id: 5, range_m: 140, speed_mps: 13.1, azimuth_deg: 2, class: 'vehicle' }], velocity: 'measured DIRECTLY from Doppler', weather: 'all-weather' },
     video: { messageId: 'camera video / detections', kind: 'proprietary sensor feed (not OTA)', sensor: 'AI video / thermal', capture: 'frames (images) @ 30 fps', frame: '1920×1080', encoding: 'H.264/H.265 when streamed', perFrameAI: { boxes: [{ class: 'pedestrian', conf: 0.94 }, { class: 'vehicle', conf: 0.98 }], events: ['red-light-running'] }, transmitted: 'detection metadata per frame (raw video → TMC for humans, not the safety msg)' },
@@ -859,6 +873,7 @@ function WorldBuilderTab({ openGlossary }) {
   const [undoStack, setUndo] = useState([]);
   const [redoStack, setRedo] = useState([]);
   const [packetInspect, setPacketInspect] = useState(null); // clicked-packet drawer
+  const [msgTip, setMsgTip] = useState(null); // hovered message toggle → how-to tooltip { msg, x, y }
   const simRaf = useRef(null);
   const svgRef = useRef(null);
   const fileRef = useRef(null);                        // hidden <input type=file> for import
@@ -1100,17 +1115,36 @@ function WorldBuilderTab({ openGlossary }) {
   const devices = objects.filter((o) => TYPES[o.type].cat === 'device');
 
   // What the built world can justify — so the sim only generates messages that
-  // make sense: SPaT/MAP/SSM need a signal; SDSM a sensor; SRM/SSM an authorized
-  // (EV/bus) requester; TIM a network source. Generalises to any canvas.
+  // make sense: SPaT/MAP/SSM need a signal; SDSM a sensor that is ACTUALLY
+  // detecting a road user; SRM/SSM an authorized (EV/bus) requester; TIM a
+  // network source. Generalises to any canvas.
   const worldCtx = useMemo(() => {
     const ds = objects.filter((o) => TYPES[o.type].cat === 'device');
     return {
       signal: ds.some((o) => o.type === 'tc' || o.type === 'signal'),
-      sensor: ds.some((o) => isSensor(o.type)),
+      // An SDSM shares DETECTED objects, so it only exists once a sensor is
+      // locked onto a road user (a 'detect' connection). A sensor sitting idle,
+      // detecting nothing, has no objects to fuse — so no SDSM leaves the RSU.
+      sensor: conns.some((c) => {
+        const A = byId[c.from], B = byId[c.to];
+        return A && B && connKind(A.type, B.type) === 'detect';
+      }),
       priority: ds.some((o) => canRequestPriority(o.type)),
       network: ds.some((o) => o.type === 'tmc' || o.type === 'celltower'),
     };
-  }, [objects]);
+  }, [objects, conns, byId]);
+  // Does the current world already satisfy each message's recipe? Drives the
+  // live ✓/✗ in the message-toggle hover tip, so it tells you what's missing.
+  const msgReady = useMemo(() => {
+    const hasVehicle = objects.some((o) => isVehicle(o.type));
+    const hasPed = objects.some((o) => o.type === 'ped');
+    const hasRsu = objects.some((o) => o.type === 'rsu');
+    return {
+      SPaT: worldCtx.signal, MAP: hasRsu, TIM: worldCtx.network,
+      SSM: worldCtx.signal && worldCtx.priority, SRM: worldCtx.signal && worldCtx.priority,
+      BSM: hasVehicle, PSM: hasPed, SDSM: worldCtx.sensor,
+    };
+  }, [objects, worldCtx]);
   // Auto-enable SRM/SSM the moment an EV/bus is introduced (and clear them when
   // the last one leaves). Fires only on the transition, so manual toggles in
   // between are respected.
@@ -1495,6 +1529,15 @@ function WorldBuilderTab({ openGlossary }) {
                     </div>
                   </div>
                 ); })()}
+                {MSG_RECIPE[pk.msg] && (
+                  <div>
+                    <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-1">How to make this appear</div>
+                    <div className="rounded-lg border border-neon-cyan/30 bg-neon-cyan/5 p-3">
+                      <p className="text-[12px] leading-relaxed text-slate-200">{MSG_RECIPE[pk.msg].need}</p>
+                      <p className="mt-1.5 text-[11px] leading-relaxed text-slate-400"><span className="text-slate-300 font-semibold">Why: </span>{MSG_RECIPE[pk.msg].why}</p>
+                    </div>
+                  </div>
+                )}
                 <div>
                   <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-1">Decoded payload (representative)</div>
                   <div className="rounded-lg border border-zinc-800 bg-black/60 p-3"><pre className="font-mono text-[12px] leading-relaxed whitespace-pre-wrap break-words"><JsonView data={decodePacket(pk.msg, { secure: pk.secure, formatOk: pk.formatOk, vehType: pk.vehType })} /></pre></div>
@@ -1508,6 +1551,27 @@ function WorldBuilderTab({ openGlossary }) {
                 {term && openGlossary && (
                   <button onClick={() => openGlossary(term)} className="w-full rounded-lg border border-neon-cyan/50 bg-neon-cyan/10 px-3 py-2 text-sm text-neon-cyan hover:bg-neon-cyan/20">View “{pk.msg}” in Glossary ↗</button>
                 )}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Message-toggle hover tip: how to make this message appear in the sim.
+            Fixed-positioned so it escapes the scrollable side panel's overflow. */}
+        {msgTip && MSG_RECIPE[msgTip.msg] && (() => {
+          const r = MSG_RECIPE[msgTip.msg]; const ready = msgReady[msgTip.msg];
+          const vw = typeof window !== 'undefined' ? window.innerWidth : 1440;
+          const left = Math.min(Math.max(msgTip.x, 136), vw - 136);   // keep the 256px tip on-screen
+          return (
+            <div className="fixed z-50 w-64 -translate-x-1/2 -translate-y-full pointer-events-none"
+              style={{ left, top: msgTip.y - 10 }}>
+              <div className="rounded-lg border border-zinc-700 bg-zinc-950/95 backdrop-blur p-3 shadow-2xl">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <span className="font-mono text-[12px] font-semibold" style={{ color: MSG_COLOR[msgTip.msg] }}>{msgTip.msg}</span>
+                  <span className={'ml-auto rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide ' + (ready ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300')}>{ready ? '✓ ready in this world' : '✗ not yet'}</span>
+                </div>
+                <p className="text-[11px] leading-relaxed text-slate-200">{r.need}</p>
+                <p className="mt-1 text-[10px] leading-relaxed text-slate-400">{r.why}</p>
               </div>
             </div>
           );
@@ -1562,14 +1626,16 @@ function WorldBuilderTab({ openGlossary }) {
           <div className="flex flex-wrap gap-1.5">
             {ALL_MSGS.map((mm) => {
               const isOn = enabled[mm] !== false;
+              const showTip = (e) => { const r = e.currentTarget.getBoundingClientRect(); setMsgTip({ msg: mm, x: r.left + r.width / 2, y: r.top }); };
               return (
                 <button key={mm} onClick={() => setEnabled((e) => ({ ...e, [mm]: !isOn }))}
+                  onMouseEnter={showTip} onMouseMove={showTip} onMouseLeave={() => setMsgTip(null)}
                   style={isOn ? { color: MSG_COLOR[mm], borderColor: MSG_COLOR[mm] } : {}}
                   className={'rounded-md border px-2 py-1 font-mono text-[11px] transition ' + (isOn ? 'bg-white/5' : 'border-zinc-700 text-slate-600 line-through')}>{mm}</button>
               );
             })}
           </div>
-          <p className="mt-2 text-[11px] text-slate-500">Pick messages, then hit <span className="text-neon-cyan">▶ Simulate this world</span> in the toolbar.</p>
+          <p className="mt-2 text-[11px] text-slate-500">Hover a message to see how to make it appear, then hit <span className="text-neon-cyan">▶ Simulate this world</span> in the toolbar.</p>
         </div>
 
         {!sel && <div className="text-sm text-slate-500">Select a device or link to see its properties &amp; spec sheet.</div>}
