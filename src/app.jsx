@@ -3311,88 +3311,244 @@ function AnatomyTab({ sub, navigate }) {
 /* =====================================================================
    5c. TEST YOUR KNOWLEDGE — a gamified quiz over everything.
 ===================================================================== */
+// Quiz sections a user can be tested on. Each question below carries a `cat`
+// matching one of these ids; passing a section earns saved stars + a best time.
+const QUIZ_SECTIONS = [
+  { id: 'messages', icon: '📨', label: 'SAE J2735 Messages', blurb: 'SPaT · MAP · BSM · SRM · PSM · TIM · SDSM' },
+  { id: 'infra', icon: '🔩', label: 'Roadside Infrastructure', blurb: 'TC · RSU · OBU · cabinet · MAP storage' },
+  { id: 'sensors', icon: '🎯', label: 'Roadside Sensing & SDSM', blurb: 'LiDAR · radar · camera · fusion' },
+  { id: 'apps', icon: '🎬', label: 'Applications & Use Cases', blurb: 'priority · GLOSA · FCW · IMA' },
+  { id: 'security', icon: '🔒', label: 'Security & Standards', blurb: '1609.2 · NTCIP · Ethernet · UDP' },
+];
+// Pass at 70%; stars scale with mastery. Progress persists in localStorage.
+const QUIZ_PASS_PCT = 70;
+const starsForPct = (pct) => (pct >= 100 ? 3 : pct >= 85 ? 2 : pct >= QUIZ_PASS_PCT ? 1 : 0);
+const fmtClock = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+const loadQuizProg = () => lsGet('v2x_quiz_progress', {});
+const quizTotalStars = (prog) => { const p = prog || loadQuizProg(); return QUIZ_SECTIONS.reduce((n, s) => n + ((p[s.id] && p[s.id].stars) || 0), 0); };
+
 const QUIZ = [
-  { q: 'A connected car needs the current colour and countdown of the light ahead to avoid running the red. Which message carries that?', options: ['SPaT', 'MAP', 'BSM', 'PSM'], answer: 0, explain: 'SPaT (Signal Phase and Timing) broadcasts each signal group’s current state and time-to-change.' },
-  { q: 'To know exactly where the stop bar and lane centerlines are, a vehicle needs…', options: ['MAP', 'SPaT', 'TIM', 'SSM'], answer: 0, explain: 'MAP carries the centimetre-accurate intersection geometry — lanes, allowed maneuvers and the stop bar.' },
-  { q: 'An ambulance needs the signal to turn green immediately. What does its OBU send?', options: ['SRM', 'BSM', 'SPaT', 'TIM'], answer: 0, explain: 'A Signal Request Message asks the controller for priority/preemption; an emergency role is granted preemption.' },
-  { q: 'A pedestrian’s phone announces their presence to nearby vehicles using…', options: ['PSM', 'BSM', 'MAP', 'SSM'], answer: 0, explain: 'The Personal Safety Message is broadcast by/for vulnerable road users.' },
-  { q: 'An OBU drops an incoming frame because it can’t verify the signature. Which standard is being enforced?', options: ['IEEE 1609.2', 'NTCIP 1202', 'IEEE 802.3', 'SAE J2735'], answer: 0, explain: 'IEEE 1609.2 requires every over-the-air frame to be signed; unverifiable frames are rejected as possible spoofing.' },
-  { q: 'A Classic (NTCIP-only) controller’s data reaches the vehicle as undecodable bytes. What was skipped at the RSU?', options: ['Protocol conversion (NTCIP 1202 → SAE J2735)', 'Security signing', 'MAP broadcast', 'A GNSS fix'], answer: 0, explain: 'A legacy TC emits NTCIP 1202; the RSU must convert it to standardized SAE J2735 before broadcast.' },
-  { q: 'A vehicle broadcasts its position, speed, heading and brake status ~10× per second. That is a…', options: ['BSM', 'SPaT', 'SRM', 'TIM'], answer: 0, explain: 'The Basic Safety Message is the high-rate vehicle-state broadcast that underpins most V2V safety apps.' },
-  { q: 'A late transit bus wants to EXTEND the green without interrupting the cycle. This is called…', options: ['Signal priority', 'Signal preemption', 'Actuated detection', 'GLOSA'], answer: 0, explain: 'Priority softly extends green (transit/freight). Preemption interrupts the cycle and is for emergency vehicles.' },
-  { q: 'Which vehicle is NOT authorized to be granted a signal-priority SRM?', options: ['Passenger car', 'Transit bus', 'Fire truck', 'Ambulance'], answer: 0, explain: 'A passenger car has no authorized priority role — its request is ignored. Transit gets priority; emergency gets preemption.' },
-  { q: 'Storing the MAP locally on the RSU (instead of the TC) mainly improves…', options: ['Backhaul load & resilience', 'Message security', 'GNSS accuracy', 'The number of lanes'], answer: 0, explain: 'Static geometry broadcast locally cuts constant traffic on the cabinet wire and keeps working if the TC link drops.' },
-  { q: 'Inside the cabinet, which component actually switches field power to the signal head’s R/Y/G?', options: ['Load switch', 'Conflict monitor', 'Detector rack', 'The controller'], answer: 0, explain: 'The load switch (a solid-state relay) switches field power on the controller’s low-voltage command — the controller never drives the LEDs directly.' },
-  { q: 'Which cabinet device drops the intersection to flashing red if it detects conflicting greens?', options: ['Conflict monitor (MMU)', 'Load switch', 'BIU', 'Flasher'], answer: 0, explain: 'The Malfunction Management Unit is the independent watchdog over the load-switch outputs.' },
-  { q: 'A work-zone advisory is delivered to vehicles over the cellular network from a TMC. Which message?', options: ['TIM', 'BSM', 'SPaT', 'PSM'], answer: 0, explain: 'The Traveler Information Message carries work-zone, speed, weather and incident advisories.' },
-  { q: 'GLOSA advises the driver of the ideal speed to…', options: ['Arrive as the light turns green (no stop)', 'Avoid a pedestrian', 'Detect a curve', 'Sign the message'], answer: 0, explain: 'Green Light Optimal Speed Advisory uses SPaT to smooth arrivals, cutting stops, idling and fuel.' },
+  // --- SAE J2735 Messages ---
+  { cat: 'messages', q: 'A connected car needs the current colour and countdown of the light ahead to avoid running the red. Which message carries that?', options: ['SPaT', 'MAP', 'BSM', 'PSM'], answer: 0, explain: 'SPaT (Signal Phase and Timing) broadcasts each signal group’s current state and time-to-change.' },
+  { cat: 'messages', q: 'To know exactly where the stop bar and lane centerlines are, a vehicle needs…', options: ['MAP', 'SPaT', 'TIM', 'SSM'], answer: 0, explain: 'MAP carries the centimetre-accurate intersection geometry — lanes, allowed maneuvers and the stop bar.' },
+  { cat: 'messages', q: 'A vehicle broadcasts its position, speed, heading and brake status ~10× per second. That is a…', options: ['BSM', 'SPaT', 'SRM', 'TIM'], answer: 0, explain: 'The Basic Safety Message is the high-rate vehicle-state broadcast that underpins most V2V safety apps.' },
+  { cat: 'messages', q: 'An ambulance needs the signal to turn green immediately. What does its OBU send?', options: ['SRM', 'BSM', 'SPaT', 'TIM'], answer: 0, explain: 'A Signal Request Message asks the controller for priority/preemption; an emergency role is granted preemption.' },
+  { cat: 'messages', q: 'A pedestrian’s phone announces their presence to nearby vehicles using…', options: ['PSM', 'BSM', 'MAP', 'SSM'], answer: 0, explain: 'The Personal Safety Message is broadcast by/for vulnerable road users.' },
+  { cat: 'messages', q: 'A work-zone advisory is delivered to vehicles over the cellular network from a TMC. Which message?', options: ['TIM', 'BSM', 'SPaT', 'PSM'], answer: 0, explain: 'The Traveler Information Message carries work-zone, speed, weather and incident advisories.' },
+  { cat: 'messages', q: 'Infrastructure sensors detect an unequipped pedestrian and share it with cars over the air. Which message?', options: ['SDSM', 'BSM', 'PSM', 'MAP'], answer: 0, explain: 'The Sensor Data Sharing Message (SAE J3224) broadcasts objects the infrastructure DETECTED — including road users with no device.' },
+  { cat: 'messages', q: 'The key difference between an SDSM and a BSM is that…', options: ['An SDSM describes OTHER road users a sensor detected; a BSM describes the sender itself', 'An SDSM is unsigned; a BSM is signed', 'An SDSM is sent by phones; a BSM by RSUs', 'They are identical'], answer: 0, explain: 'A BSM is a vehicle describing ITSELF; an SDSM is infrastructure (or a vehicle) describing OTHERS its sensors see.' },
+  // --- Roadside Infrastructure ---
+  { cat: 'infra', q: 'Inside the cabinet, which component actually switches field power to the signal head’s R/Y/G?', options: ['Load switch', 'Conflict monitor', 'Detector rack', 'The controller'], answer: 0, explain: 'The load switch (a solid-state relay) switches field power on the controller’s low-voltage command — the controller never drives the LEDs directly.' },
+  { cat: 'infra', q: 'Which cabinet device drops the intersection to flashing red if it detects conflicting greens?', options: ['Conflict monitor (MMU)', 'Load switch', 'BIU', 'Flasher'], answer: 0, explain: 'The Malfunction Management Unit is the independent watchdog over the load-switch outputs.' },
+  { cat: 'infra', q: 'Storing the MAP locally on the RSU (instead of the TC) mainly improves…', options: ['Backhaul load & resilience', 'Message security', 'GNSS accuracy', 'The number of lanes'], answer: 0, explain: 'Static geometry broadcast locally cuts constant traffic on the cabinet wire and keeps working if the TC link drops.' },
+  { cat: 'infra', q: 'SPaT must be passed through live, but MAP can be re-broadcast on a timer. That live pass-through mode is…', options: ['Immediate-forward', 'Store-and-repeat', 'Preemption', 'Actuation'], answer: 0, explain: 'SPaT changes every second so it is immediate-forward; static MAP can be store-and-repeat when it lives on the RSU.' },
+  { cat: 'infra', q: 'Which in-vehicle device receives over-the-air messages and broadcasts the vehicle’s own state?', options: ['OBU', 'RSU', 'TC', 'MMU'], answer: 0, explain: 'The On-Board Unit is the vehicle’s V2X transceiver; the RSU is its roadside counterpart.' },
+  { cat: 'infra', q: 'Which controller can natively generate and sign SAE J2735 — no RSU conversion needed?', options: ['ATC (Advanced Traffic Controller)', 'Legacy NEMA TS2', 'Model 170', 'A load switch'], answer: 0, explain: 'A modern Linux-based ATC speaks J2735 directly; legacy NTCIP-only controllers need the RSU to convert.' },
+  { cat: 'infra', q: 'Which roadside platform fuses sensor detections and can even generate a PSM for a phoneless pedestrian?', options: ['V2X Hub', 'Conflict monitor', 'Load switch', 'gNodeB'], answer: 0, explain: 'The V2X Hub is edge middleware that fuses detections and bridges NTCIP↔J2735; it does not transmit OTA or drive the signal itself.' },
+  // --- Roadside Sensing & SDSM ---
+  { cat: 'sensors', q: 'Which roadside sensor gives centimetre 3-D position of road users, day or night?', options: ['LiDAR', 'Inductive loop', 'GNSS', 'BSM'], answer: 0, explain: 'LiDAR builds a 3-D point cloud with cm accuracy independent of lighting.' },
+  { cat: 'sensors', q: 'Which sensor measures speed and range in any weather and can replace inductive loops?', options: ['Radar', 'Camera', 'LiDAR', 'Loop'], answer: 0, explain: 'mmWave radar measures Doppler speed and range through fog, rain and darkness.' },
+  { cat: 'sensors', q: 'Which sensor best classifies road users and reads events like red-light running?', options: ['AI camera', 'Radar', 'Inductive loop', 'GNSS'], answer: 0, explain: 'An AI video/thermal camera classifies objects and reads visual events a radar or loop cannot.' },
+  { cat: 'sensors', q: 'The fused detected-object broadcast standardised as SAE J3224 is the…', options: ['SDSM', 'BSM', 'SPaT', 'MAP'], answer: 0, explain: 'The Sensor Data Sharing Message shares infrastructure-detected objects with connected vehicles.' },
+  { cat: 'sensors', q: 'The raw LiDAR→Hub feed carrying ~131k points per scan is…', options: ['A point cloud (proprietary, not over-the-air)', 'An SDSM', 'A BSM', 'A TIM'], answer: 0, explain: 'The point cloud is a proprietary sensor feed; the Hub fuses it into an SDSM — the raw cloud is never sent OTA.' },
+  { cat: 'sensors', q: 'On a permissive left turn, what does the car compute from a radar-fed SDSM?', options: ['Whether the gap to oncoming traffic is big enough to clear', 'The signal’s battery level', 'Its own tyre pressure', 'The MAP revision'], answer: 0, explain: 'It compares its time-to-clear against the oncoming vehicle’s time-to-arrival from the SDSM object.' },
+  { cat: 'sensors', q: 'A wrong-way driver with no V2X device is caught and shared by…', options: ['A roadside LiDAR generating an SDSM', 'The driver’s own BSM', 'A TIM from the TMC', 'The MMU'], answer: 0, explain: 'Infrastructure sensing sees the unequipped WWD; the RSU broadcasts an SDSM pinpointing it so nearby cars avoid the head-on.' },
+  { cat: 'sensors', q: 'The main payoff of roadside sensing over V2X-only is that it…', options: ['Detects UNEQUIPPED road users with no OBU or phone', 'Removes the need for signing', 'Makes GNSS unnecessary', 'Replaces the MAP'], answer: 0, explain: 'Cameras/radar/LiDAR see everyone directly, giving even device-less road users a “voice” via the SDSM.' },
+  // --- Applications & Use Cases ---
+  { cat: 'apps', q: 'A late transit bus wants to EXTEND the green without interrupting the cycle. This is called…', options: ['Signal priority', 'Signal preemption', 'Actuated detection', 'GLOSA'], answer: 0, explain: 'Priority softly extends green (transit/freight). Preemption interrupts the cycle and is for emergency vehicles.' },
+  { cat: 'apps', q: 'Which vehicle is NOT authorized to be granted a signal-priority SRM?', options: ['Passenger car', 'Transit bus', 'Fire truck', 'Ambulance'], answer: 0, explain: 'A passenger car has no authorized priority role — its request is ignored. Transit gets priority; emergency gets preemption.' },
+  { cat: 'apps', q: 'GLOSA advises the driver of the ideal speed to…', options: ['Arrive as the light turns green (no stop)', 'Avoid a pedestrian', 'Detect a curve', 'Sign the message'], answer: 0, explain: 'Green Light Optimal Speed Advisory uses SPaT to smooth arrivals, cutting stops, idling and fuel.' },
+  { cat: 'apps', q: 'The lead car brakes hard and the car behind is warned via its BSM. This app is…', options: ['Forward Collision Warning', 'GLOSA', 'Signal priority', 'RLVW'], answer: 0, explain: 'FCW uses the lead vehicle’s BSM (speed/brake) to warn a following driver of an impending rear-end.' },
+  { cat: 'apps', q: 'Cross traffic you cannot see at an intersection is surfaced to you by…', options: ['Intersection Movement Assist (IMA)', 'GLOSA', 'TIM', 'SSM'], answer: 0, explain: 'IMA uses others’ BSMs to warn of a likely collision with traffic you have no line of sight to.' },
+  { cat: 'apps', q: 'Braking that propagates a warning beyond your line of sight (through/around a truck) is…', options: ['Emergency Electronic Brake Light', 'Forward Collision Warning', 'GLOSA', 'Actuated detection'], answer: 0, explain: 'EEBL relays a hard-braking BSM so following vehicles react even when the braking car is hidden.' },
+  { cat: 'apps', q: 'Using vehicles’ BSMs to actuate the signal — replacing inductive loops/cameras — is…', options: ['V2X actuated detection', 'Preemption', 'GLOSA', 'Protocol conversion'], answer: 0, explain: 'Connected-vehicle presence/speed from BSMs can call and extend phases without in-pavement loops.' },
+  { cat: 'apps', q: 'ADAS predicts the driver cannot stop for the red and alerts them. This is…', options: ['Red-Light Violation Warning', 'GLOSA', 'IMA', 'Signal priority'], answer: 0, explain: 'RLVW combines SPaT + MAP with the vehicle’s speed to predict a violation and warn in time.' },
+  // --- Security & Standards ---
+  { cat: 'security', q: 'An OBU drops an incoming frame because it can’t verify the signature. Which standard is being enforced?', options: ['IEEE 1609.2', 'NTCIP 1202', 'IEEE 802.3', 'SAE J2735'], answer: 0, explain: 'IEEE 1609.2 requires every over-the-air frame to be signed; unverifiable frames are rejected as possible spoofing.' },
+  { cat: 'security', q: 'A Classic (NTCIP-only) controller’s data reaches the vehicle as undecodable bytes. What was skipped at the RSU?', options: ['Protocol conversion (NTCIP 1202 → SAE J2735)', 'Security signing', 'MAP broadcast', 'A GNSS fix'], answer: 0, explain: 'A legacy TC emits NTCIP 1202; the RSU must convert it to standardized SAE J2735 before broadcast.' },
+  { cat: 'security', q: 'Signing every over-the-air frame primarily prevents…', options: ['Spoofing and tampering by untrusted senders', 'Radio interference', 'GNSS drift', 'Backhaul congestion'], answer: 0, explain: '1609.2 signatures let receivers trust that a message came from an authorised, unmodified source.' },
+  { cat: 'security', q: 'The high-speed wired link between the TC and RSU inside the cabinet is typically…', options: ['Ethernet (IEEE 802.3)', 'PC5 sidelink', 'Cellular Uu', 'CAN bus'], answer: 0, explain: 'The in-cabinet TC↔RSU link is wired Ethernet; the 5.9 GHz radio is only on the RSU’s vehicle-facing side.' },
+  { cat: 'security', q: 'Time-critical V2X safety favours which transport, trading delivery-guarantee for speed?', options: ['UDP', 'TCP', 'FTP', 'SMTP'], answer: 0, explain: 'Connectionless UDP suits high-rate, low-latency safety messages where a late retransmit is useless.' },
+  { cat: 'security', q: 'V2N advisories ride the cellular “Uu” interface; direct V2V/V2I safety instead uses…', options: ['5.9 GHz PC5 sidelink', '4G Uu', 'Wi-Fi 6', 'Bluetooth'], answer: 0, explain: 'Direct safety messaging uses the 5.9 GHz PC5 sidelink (C-V2X) / DSRC — not the mobile-network Uu path.' },
 ];
 
-function QuizTab() {
+// Row of ★ (earned) + ☆ (remaining) out of `of`.
+function StarRow({ n, of = 3, className = '' }) {
+  return <span className={'font-mono ' + className}>{'★'.repeat(n)}<span className="text-zinc-700">{'☆'.repeat(Math.max(0, of - n))}</span></span>;
+}
+
+// A modal quiz launched from the header. Pick a section (or all), answer its
+// shuffled questions, and — on a pass (≥70%) — earn stars + a best time that
+// persist in localStorage. Renders standalone (menu view) with no props too.
+function QuizTab({ onClose }) {
   const shuffle = (a) => { const b = a.slice(); for (let i = b.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [b[i], b[j]] = [b[j], b[i]]; } return b; };
-  const [order, setOrder] = useState(() => shuffle(QUIZ.map((_, i) => i)));
+  const [prog, setProg] = useState(loadQuizProg);
+  const [view, setView] = useState('menu');        // 'menu' | 'playing' | 'result'
+  const [catId, setCatId] = useState(null);
+  const [run, setRun] = useState([]);               // this attempt's questions, options pre-shuffled
   const [idx, setIdx] = useState(0);
   const [sel, setSel] = useState(null);
   const [score, setScore] = useState(0);
-  const [done, setDone] = useState(false);
-  const total = QUIZ.length;
-  const q = QUIZ[order[idx]];
-  const answered = sel !== null;
-  const restart = () => { setOrder(shuffle(QUIZ.map((_, i) => i))); setIdx(0); setSel(null); setScore(0); setDone(false); };
-  const choose = (i) => { if (answered) return; setSel(i); if (i === q.answer) setScore((s) => s + 1); };
-  const next = () => { if (idx + 1 >= total) setDone(true); else { setIdx(idx + 1); setSel(null); } };
+  const [startedAt, setStartedAt] = useState(0);
+  const [elapsed, setElapsed] = useState(0);
+  const [result, setResult] = useState(null);       // { pct, stars, timeMs, passed, improved }
 
-  if (done) {
-    const pct = Math.round((score / total) * 100);
-    const msg = pct >= 85 ? 'V2X pro! 🏆' : pct >= 60 ? 'Solid understanding 👍' : 'Keep exploring the tabs and try again.';
-    return (
-      <div className="flex h-full items-center justify-center p-6">
-        <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950/60 p-8 text-center">
-          <div className="text-[11px] uppercase tracking-widest text-neon-cyan">Results</div>
-          <div className="mt-3 text-5xl font-black text-slate-100">{score}<span className="text-slate-500 text-2xl"> / {total}</span></div>
-          <div className="mt-1 text-lg font-semibold" style={{ color: pct >= 85 ? '#34d399' : pct >= 60 ? '#22d3ee' : '#fbbf24' }}>{pct}%</div>
-          <p className="mt-3 text-[14px] text-slate-300">{msg}</p>
-          <button onClick={restart} className="mt-6 w-full rounded-lg bg-neon-cyan px-4 py-2.5 text-sm font-semibold text-zinc-950 hover:brightness-110 glow-cyan">↺ Try again</button>
+  // live timer while answering
+  useEffect(() => {
+    if (view !== 'playing') return;
+    const t = setInterval(() => setElapsed(Date.now() - startedAt), 250);
+    return () => clearInterval(t);
+  }, [view, startedAt]);
+
+  const secMeta = (id) => (id === 'all' ? { icon: '🧠', label: 'All sections', blurb: 'Every question, shuffled' } : QUIZ_SECTIONS.find((s) => s.id === id));
+  const buildRun = (cat) => shuffle(cat === 'all' ? QUIZ : QUIZ.filter((x) => x.cat === cat)).map((item) => {
+    const opts = shuffle(item.options.map((o, i) => ({ o, correct: i === item.answer })));
+    return { q: item.q, explain: item.explain, options: opts.map((x) => x.o), answer: opts.findIndex((x) => x.correct) };
+  });
+  const start = (cat) => { setCatId(cat); setRun(buildRun(cat)); setIdx(0); setSel(null); setScore(0); setResult(null); setStartedAt(Date.now()); setElapsed(0); setView('playing'); };
+
+  const q = run[idx];
+  const total = run.length;
+  const answered = sel !== null;
+  const choose = (i) => { if (answered) return; setSel(i); };
+  const next = () => {
+    const gained = sel === q.answer ? 1 : 0;
+    if (idx + 1 >= total) finish(score + gained, Date.now() - startedAt);
+    else { setScore((s) => s + gained); setIdx(idx + 1); setSel(null); }
+  };
+
+  const finish = (finalScore, timeMs) => {
+    setScore(finalScore);
+    const pct = Math.round((finalScore / total) * 100);
+    const passed = pct >= QUIZ_PASS_PCT;
+    const stars = starsForPct(pct);
+    let improved = false;
+    if (passed && catId !== 'all') {
+      const prev = prog[catId];
+      improved = !prev || stars > prev.stars || pct > (prev.bestPct || 0) || timeMs < prev.bestTimeMs;
+      const rec = {
+        stars: Math.max(stars, prev ? prev.stars : 0),
+        bestPct: Math.max(pct, prev ? (prev.bestPct || 0) : 0),
+        bestTimeMs: prev ? Math.min(prev.bestTimeMs, timeMs) : timeMs,
+        passedAt: prev && prev.passedAt ? prev.passedAt : new Date().toISOString(),
+      };
+      const np = { ...prog, [catId]: rec };
+      setProg(np); lsSet('v2x_quiz_progress', np);
+    }
+    setResult({ pct, stars, timeMs, passed, improved });
+    setView('result');
+  };
+
+  const closeBtn = <button onClick={onClose} className="text-slate-400 hover:text-white text-xl leading-none">✕</button>;
+  const shell = (body) => (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" onClick={onClose}>
+      <div className="w-full max-w-2xl max-h-[88vh] overflow-auto rounded-2xl border border-zinc-800 bg-zinc-950 shadow-2xl" onClick={(e) => e.stopPropagation()}>{body}</div>
+    </div>
+  );
+
+  // ---- MENU: choose a section ----
+  if (view === 'menu') {
+    const totalStars = quizTotalStars(prog);
+    const maxStars = QUIZ_SECTIONS.length * 3;
+    const card = (id, count) => {
+      const meta = secMeta(id); const p = id === 'all' ? null : prog[id];
+      return (
+        <button key={id} onClick={() => start(id)}
+          className="w-full flex items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-900/40 p-3 text-left hover:border-neon-cyan/60 transition">
+          <span className="text-2xl shrink-0">{meta.icon}</span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2"><span className="text-[13px] font-semibold text-slate-100">{meta.label}</span><span className="text-[10px] text-slate-500">{count} Q</span></div>
+            <div className="text-[11px] text-slate-400 truncate">{meta.blurb}</div>
+            {p && <div className="mt-0.5 text-[10px] text-amber-300/90">Best {p.bestPct}% · passed in {fmtClock(p.bestTimeMs)}</div>}
+          </div>
+          {id !== 'all' && <StarRow n={p ? p.stars : 0} className="text-[15px] text-amber-300 shrink-0" />}
+        </button>
+      );
+    };
+    return shell(
+      <div className="p-6">
+        <div className="flex items-start justify-between">
+          <div>
+            <div className="flex items-center gap-2"><span className="text-xl">🎯</span><h2 className="text-lg font-bold text-slate-100">Test Your Knowledge</h2></div>
+            <p className="mt-1 text-[12px] text-slate-400">Pick an area to be tested on. Pass (≥{QUIZ_PASS_PCT}%) to earn stars and log your best time.</p>
+          </div>
+          {onClose && closeBtn}
+        </div>
+        <div className="mt-3 flex items-center gap-2 rounded-lg border border-amber-500/25 bg-amber-400/5 px-3 py-2">
+          <StarRow n={totalStars} of={maxStars} className="text-[15px] text-amber-300" />
+          <span className="text-[12px] text-slate-300 font-semibold">{totalStars} / {maxStars} stars</span>
+          {totalStars >= maxStars && <span className="ml-auto text-[12px] text-emerald-300 font-semibold">V2X mastery 🏆</span>}
+        </div>
+        <div className="mt-4 space-y-2">
+          {QUIZ_SECTIONS.map((s) => card(s.id, QUIZ.filter((x) => x.cat === s.id).length))}
+          <div className="pt-1">{card('all', QUIZ.length)}</div>
         </div>
       </div>
     );
   }
 
-  return (
-    <div className="flex h-full items-center justify-center p-6">
-      <div className="w-full max-w-2xl">
-        <div className="flex items-center justify-between text-[12px] mb-2">
-          <span className="text-slate-400">Question <span className="text-slate-100 font-semibold">{idx + 1}</span> / {total}</span>
-          <span className="rounded-md bg-zinc-900 border border-zinc-700 px-2 py-0.5 font-mono text-neon-green">Score {score}</span>
+  // ---- RESULT ----
+  if (view === 'result') {
+    const r = result; const meta = secMeta(catId);
+    const tone = r.pct >= 85 ? '#34d399' : r.passed ? '#22d3ee' : '#fbbf24';
+    return shell(
+      <div className="p-8 text-center">
+        <div className="flex items-center justify-end">{onClose && closeBtn}</div>
+        <div className="text-[11px] uppercase tracking-widest text-neon-cyan">{meta.label} · results</div>
+        <div className="mt-2 text-5xl font-black text-slate-100">{score}<span className="text-slate-500 text-2xl"> / {total}</span></div>
+        <div className="mt-1 text-lg font-semibold" style={{ color: tone }}>{r.pct}%</div>
+        {catId !== 'all' && <div className="mt-3"><StarRow n={r.stars} className="text-3xl text-amber-300" /></div>}
+        <div className="mt-2 text-[13px] text-slate-300">{r.passed ? 'Passed' : `Need ${QUIZ_PASS_PCT}% to pass`} · finished in <span className="font-mono text-slate-100">{fmtClock(r.timeMs)}</span></div>
+        {r.passed && catId !== 'all' && <div className="mt-1 text-[12px] text-emerald-300">{r.improved ? '✔ New best saved' : '✔ Section already passed — nice run'}</div>}
+        {catId === 'all' && <div className="mt-1 text-[11px] text-slate-500">The all-sections run isn’t scored for stars — play a single section to earn them.</div>}
+        <div className="mt-6 flex gap-2">
+          <button onClick={() => start(catId)} className="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2.5 text-sm font-semibold text-slate-200 hover:border-zinc-500">↺ Retry</button>
+          <button onClick={() => setView('menu')} className="flex-1 rounded-lg bg-neon-cyan px-4 py-2.5 text-sm font-semibold text-zinc-950 hover:brightness-110 glow-cyan">← Sections</button>
         </div>
-        <div className="h-1.5 rounded-full bg-zinc-800 overflow-hidden mb-4"><div className="h-full bg-neon-cyan transition-all" style={{ width: ((idx + (answered ? 1 : 0)) / total) * 100 + '%' }} /></div>
+      </div>
+    );
+  }
 
-        <div className="rounded-2xl border border-zinc-800 bg-zinc-950/50 p-6">
-          <h3 className="text-[17px] font-semibold text-slate-100 leading-snug">{q.q}</h3>
-          <div className="mt-4 space-y-2">
-            {q.options.map((o, i) => {
-              const correct = i === q.answer;
-              const cls = !answered ? 'border-zinc-700 bg-zinc-900/60 hover:border-neon-cyan/60 text-slate-200'
-                : correct ? 'border-emerald-600 bg-emerald-500/15 text-emerald-100'
-                  : i === sel ? 'border-red-600 bg-red-500/15 text-red-100' : 'border-zinc-800 bg-zinc-900/40 text-slate-500';
-              return (
-                <button key={i} onClick={() => choose(i)} disabled={answered}
-                  className={'w-full flex items-center justify-between gap-3 rounded-lg border px-4 py-3 text-left text-[14px] transition ' + cls}>
-                  <span>{o}</span>
-                  {answered && (correct ? <span className="text-emerald-300">✔</span> : i === sel ? <span className="text-red-300">✗</span> : null)}
-                </button>
-              );
-            })}
-          </div>
-          {answered && (
-            <div className="mt-4">
-              <div className={'rounded-lg border p-3 text-[13px] ' + (sel === q.answer ? 'border-emerald-700/60 bg-emerald-500/10 text-emerald-200' : 'border-amber-700/60 bg-amber-500/10 text-amber-200')}>
-                <span className="font-semibold">{sel === q.answer ? 'Correct. ' : 'Not quite. '}</span>{q.explain}
-              </div>
-              <button onClick={next} className="mt-3 w-full rounded-lg bg-neon-cyan px-4 py-2.5 text-sm font-semibold text-zinc-950 hover:brightness-110 glow-cyan">{idx + 1 >= total ? 'See results →' : 'Next question →'}</button>
-            </div>
-          )}
+  // ---- PLAYING ----
+  const meta = secMeta(catId);
+  return shell(
+    <div className="p-6">
+      <div className="flex items-center justify-between text-[12px] mb-2">
+        <button onClick={() => setView('menu')} className="text-slate-400 hover:text-white">← {meta.label}</button>
+        <div className="flex items-center gap-2">
+          <span className="rounded-md bg-zinc-900 border border-zinc-700 px-2 py-0.5 font-mono text-slate-300">⏱ {fmtClock(elapsed)}</span>
+          <span className="rounded-md bg-zinc-900 border border-zinc-700 px-2 py-0.5 font-mono text-neon-green">Score {score}</span>
+          {onClose && closeBtn}
         </div>
+      </div>
+      <div className="text-[11px] text-slate-500 mb-1">Question <span className="text-slate-200 font-semibold">{idx + 1}</span> / {total}</div>
+      <div className="h-1.5 rounded-full bg-zinc-800 overflow-hidden mb-4"><div className="h-full bg-neon-cyan transition-all" style={{ width: ((idx + (answered ? 1 : 0)) / total) * 100 + '%' }} /></div>
+
+      <div className="rounded-2xl border border-zinc-800 bg-zinc-950/50 p-6">
+        <h3 className="text-[17px] font-semibold text-slate-100 leading-snug">{q.q}</h3>
+        <div className="mt-4 space-y-2">
+          {q.options.map((o, i) => {
+            const correct = i === q.answer;
+            const cls = !answered ? 'border-zinc-700 bg-zinc-900/60 hover:border-neon-cyan/60 text-slate-200'
+              : correct ? 'border-emerald-600 bg-emerald-500/15 text-emerald-100'
+                : i === sel ? 'border-red-600 bg-red-500/15 text-red-100' : 'border-zinc-800 bg-zinc-900/40 text-slate-500';
+            return (
+              <button key={i} onClick={() => choose(i)} disabled={answered}
+                className={'w-full flex items-center justify-between gap-3 rounded-lg border px-4 py-3 text-left text-[14px] transition ' + cls}>
+                <span>{o}</span>
+                {answered && (correct ? <span className="text-emerald-300">✔</span> : i === sel ? <span className="text-red-300">✗</span> : null)}
+              </button>
+            );
+          })}
+        </div>
+        {answered && (
+          <div className="mt-4">
+            <div className={'rounded-lg border p-3 text-[13px] ' + (sel === q.answer ? 'border-emerald-700/60 bg-emerald-500/10 text-emerald-200' : 'border-amber-700/60 bg-amber-500/10 text-amber-200')}>
+              <span className="font-semibold">{sel === q.answer ? 'Correct. ' : 'Not quite. '}</span>{q.explain}
+            </div>
+            <button onClick={next} className="mt-3 w-full rounded-lg bg-neon-cyan px-4 py-2.5 text-sm font-semibold text-zinc-950 hover:brightness-110 glow-cyan">{idx + 1 >= total ? 'See results →' : 'Next question →'}</button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -3404,7 +3560,6 @@ function QuizTab() {
 const TABS = [
   { id: 'builder', label: 'World Builder', icon: '🛠️' },
   { id: 'cases', label: 'Use Cases', icon: '🎬' },
-  { id: 'quiz', label: 'Test Your Knowledge', icon: '🎯' },
   { id: 'anatomy', label: 'Device Anatomy', icon: '🔩' },
   { id: 'glossary', label: 'V2X Definitions Glossary', icon: '📖' },
 ];
@@ -3414,7 +3569,7 @@ const TABS = [
 const INTRO_STEPS = [
   { icon: '🛠️', title: 'World Builder', body: 'Drag devices onto the canvas, wire them port-to-port, pick real vendor models, then press Simulate to watch SAE J2735 packets flow. Save, share a link, or export the world.' },
   { icon: '🎬', title: 'Use Cases', body: 'Animated V2X scenarios grouped by V2I / V2V / V2P / V2N with a scrub timeline. Related ones share a variant toggle. Every scenario is deep-linkable.' },
-  { icon: '🎯', title: 'Test Your Knowledge', body: 'A shuffled, scored quiz spanning messages, roles, security and cabinet anatomy.' },
+  { icon: '🎯', title: 'Test Your Knowledge', body: 'Tap 🎯 Quiz in the top-right to open a sectioned, shuffled quiz — messages, infrastructure, sensing, applications and security. Pass a section to earn stars and log your best time.' },
   { icon: '🔩', title: 'Device Anatomy', body: 'Wire up a real traffic-controller cabinet, and explore the RSU and OBU internals part by part.' },
   { icon: '📖', title: 'Glossary', body: 'Every term with a Definition / Format toggle showing the real wire layouts — plus sources for further reading.' },
 ];
@@ -3452,6 +3607,8 @@ function App() {
   // glossary terms all deep-linkable / shareable.
   const [route, setRoute] = useState(() => readHash() || lsGet('v2x_tab', 'builder'));
   const [showIntro, setShowIntro] = useState(() => !lsGet('v2x_seen_intro', false) && !readHash());
+  const [showQuiz, setShowQuiz] = useState(() => readHash() === 'quiz');   // '#quiz' opens the quiz modal
+  const [quizStars, setQuizStars] = useState(() => quizTotalStars());
 
   const firstSeg = route.split('/')[0];
   const tabId = firstSeg.indexOf('world=') === 0 ? 'builder' : firstSeg;
@@ -3476,10 +3633,12 @@ function App() {
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
   const closeIntro = () => { setShowIntro(false); lsSet('v2x_seen_intro', true); };
+  const closeQuiz = () => { setShowQuiz(false); setQuizStars(quizTotalStars()); if (route === 'quiz') setRoute('builder'); };
 
   return (
     <div className="h-screen flex flex-col bg-zinc-950">
       {showIntro && <FirstRun onClose={closeIntro} />}
+      {showQuiz && <QuizTab onClose={closeQuiz} />}
       <header className="shrink-0 border-b border-zinc-800 bg-zinc-950/80 backdrop-blur">
         <div className="flex items-center gap-4 px-5 py-3">
           <div className="flex items-center gap-2">
@@ -3498,14 +3657,20 @@ function App() {
               </button>
             ))}
           </nav>
-          <button onClick={() => setShowIntro(true)} title="Show the intro tour"
-            className="ml-auto shrink-0 rounded-full border border-zinc-700 h-8 w-8 text-slate-400 hover:text-white hover:border-zinc-500">?</button>
+          <div className="ml-auto flex items-center gap-2">
+            <button onClick={() => setShowQuiz(true)} title="Test your knowledge"
+              className="shrink-0 flex items-center gap-1.5 rounded-lg border border-zinc-700 px-3 py-1.5 text-sm text-slate-300 hover:text-white hover:border-zinc-500">
+              <span>🎯</span><span className="hidden md:inline">Quiz</span>
+              {quizStars > 0 && <span className="rounded bg-amber-400/15 text-amber-300 text-[11px] font-mono font-semibold px-1.5 py-0.5">★ {quizStars}</span>}
+            </button>
+            <button onClick={() => setShowIntro(true)} title="Show the intro tour"
+              className="shrink-0 rounded-full border border-zinc-700 h-8 w-8 text-slate-400 hover:text-white hover:border-zinc-500">?</button>
+          </div>
         </div>
       </header>
       <main className="flex-1 min-h-0">
         {tab === 'builder' && <WorldBuilderTab openGlossary={openGlossary} />}
         {tab === 'cases' && <UseCasesTab openGlossary={openGlossary} sub={sub} navigate={navigate} />}
-        {tab === 'quiz' && <QuizTab />}
         {tab === 'anatomy' && <AnatomyTab sub={sub} navigate={navigate} />}
         {tab === 'glossary' && <GlossaryTab sub={sub} navigate={navigate} />}
       </main>
