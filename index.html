@@ -4029,6 +4029,11 @@ const CATEGORIES = [{
   label: 'V2N',
   name: 'Vehicle → Network',
   desc: 'Vehicles ↔ cloud / TMC over cellular'
+}, {
+  id: 'SENSOR',
+  label: 'Sensor',
+  name: 'Roadside Sensing → SDSM',
+  desc: 'LiDAR · radar · camera detect road users → fused into an SDSM the RSU broadcasts'
 }];
 function lightColor(state) {
   return state === 'green' ? TONE.green : state === 'yellow' ? TONE.amber : TONE.red;
@@ -6226,7 +6231,7 @@ const SCENARIOS = [{
   // sensor type — each has different strengths and feeds the infrastructure,
   // which then speaks V2X on the road user's behalf.
   id: 'sensordet',
-  category: 'V2I',
+  category: 'SENSOR',
   icon: '🛰️',
   title: 'Roadside Sensor Detection',
   tagline: 'LiDAR · radar · camera — detecting the unequipped',
@@ -6442,7 +6447,7 @@ const SCENARIOS = [{
   }]
 }, {
   id: 'hubfusion',
-  category: 'V2I',
+  category: 'SENSOR',
   icon: '🖥️',
   title: 'Sensor Fusion via V2X Hub',
   tagline: 'LiDAR + radar + camera → one fused scene',
@@ -6528,6 +6533,285 @@ const SCENARIOS = [{
       crosswalk: 470,
       cars,
       ped,
+      sensors,
+      packets,
+      banner,
+      waves: detect
+    };
+  }
+}, {
+  id: 'permleft',
+  category: 'SENSOR',
+  icon: '↩️',
+  title: 'Permissive Left Turn · Radar → SDSM',
+  tagline: 'The car gap-checks oncoming traffic from an SDSM',
+  duration: 9,
+  variants: [{
+    id: 'go',
+    label: 'Gap accepted · turn',
+    tagline: 'Oncoming is far enough — the turn clears',
+    duration: 9,
+    why: 'On a permissive left (a green ball, not a protected arrow) the driver — or the car — must judge whether it can complete the turn across oncoming traffic before that traffic arrives. A roadside radar measures the oncoming vehicle’s speed and range; the infrastructure fuses that into an SDSM (SAE J3224) the turning car receives. The car compares its time-to-clear against the oncoming car’s time-to-arrival. Here the gap is large, so the left turn completes safely.',
+    messages: ['tracks', 'SDSM'],
+    frame(t) {
+      const ox = lerp(1080, 250, seg(t, 0, 9)); // oncoming — far and steady
+      const tp = seg(t, 4, 8); // left-turn progress
+      const ex = t < 4 ? lerp(-40, 415, seg(t, 0, 3.4)) : lerp(415, 430, clamp01(tp * 2.4));
+      const ey = t < 4 ? G.ewLaneY : lerp(G.ewLaneY, -40, tp);
+      const detect = t >= 1.4 && t < 4.8;
+      const cars = [{
+        id: 'onc',
+        x: ox,
+        y: 232,
+        or: 'h',
+        kind: 'car',
+        label: 'ONC'
+      }, {
+        id: 'ego',
+        x: ex,
+        y: ey,
+        or: t >= 4.4 ? 'v' : 'h',
+        kind: 'car',
+        label: 'EGO'
+      }];
+      const sensors = [{
+        x: 630,
+        y: 118,
+        kind: 'radar',
+        tx: ox,
+        active: detect,
+        label: detect ? '48 km/h · far' : ''
+      }];
+      const packets = [];
+      let banner;
+      if (t < 1.4) banner = {
+        text: 'You want to turn left across oncoming traffic — on a green ball, no arrow',
+        tone: 'info',
+        sub: 'permissive left: the gap is YOURS to judge'
+      };else if (t < 3) {
+        packets.push({
+          ...lerpPt({
+            x: 630,
+            y: 132
+          }, G.rsu, seg(t, 1.4, 3)),
+          label: 'tracks',
+          tone: TONE.cyan
+        });
+        banner = {
+          text: 'Roadside radar clocks the oncoming car’s speed & range',
+          tone: 'info',
+          sub: '≈ 48 km/h · 150 m away'
+        };
+      } else if (t < 4.8) {
+        packets.push({
+          ...lerpPt(G.rsu, {
+            x: ex,
+            y: ey
+          }, (t - 3) % 1.3 / 1.3),
+          label: 'SDSM',
+          tone: TONE.cyan
+        });
+        banner = {
+          text: 'RSU broadcasts an SDSM — the car computes it can clear before the oncoming arrives',
+          tone: 'ok'
+        };
+      } else banner = {
+        text: 'Gap accepted — the left turn completes safely before the oncoming car reaches the conflict point',
+        tone: 'ok'
+      };
+      return {
+        layout: 'cross',
+        infra: 'signals',
+        ew: 'green',
+        ns: 'red',
+        cars,
+        sensors,
+        packets,
+        banner,
+        waves: detect || t >= 3 && t < 4.8
+      };
+    }
+  }, {
+    id: 'wait',
+    label: 'Gap rejected · wait',
+    tagline: 'Oncoming is closing fast — the car holds',
+    duration: 9,
+    why: 'Same permissive left, but now the oncoming vehicle is close and fast. The radar-fed SDSM lets the turning car compute that it cannot clear the conflict zone in time, so it correctly waits, lets the oncoming car pass, and only then completes the turn. This is the calculation a permissive left demands — made from infrastructure sensing instead of a guess.',
+    messages: ['tracks', 'SDSM'],
+    frame(t) {
+      const ox = 1000 - 175 * t; // oncoming — closing fast
+      const wait = t < 4.6;
+      const ex = wait ? Math.min(348, lerp(-40, 348, seg(t, 0, 2.4))) : t < 5.4 ? lerp(348, 430, seg(t, 4.6, 5.4)) : 430;
+      const ey = !wait && t >= 5.4 ? lerp(G.ewLaneY, -40, seg(t, 5.4, 9)) : G.ewLaneY;
+      const detect = t >= 0.8 && t < 3.4;
+      const cars = [{
+        id: 'onc',
+        x: ox,
+        y: 232,
+        or: 'h',
+        kind: 'car',
+        label: 'ONC',
+        alert: t >= 2.2 && t < 3.4
+      }, {
+        id: 'ego',
+        x: ex,
+        y: ey,
+        or: t >= 5.6 ? 'v' : 'h',
+        kind: 'car',
+        label: 'EGO'
+      }];
+      const sensors = [{
+        x: 630,
+        y: 118,
+        kind: 'radar',
+        tx: ox,
+        active: detect,
+        label: detect ? '84 km/h · close' : ''
+      }];
+      const packets = [];
+      let banner;
+      if (t < 1) banner = {
+        text: 'Again a permissive left — but this oncoming car is closing fast',
+        tone: 'info',
+        sub: 'permissive left: the gap is YOURS to judge'
+      };else if (t < 2.4) {
+        packets.push({
+          ...lerpPt({
+            x: 630,
+            y: 132
+          }, G.rsu, seg(t, 1, 2.4)),
+          label: 'tracks',
+          tone: TONE.cyan
+        });
+        banner = {
+          text: 'Roadside radar clocks it — high speed, short range',
+          tone: 'warn',
+          sub: '≈ 84 km/h · 55 m away'
+        };
+      } else if (t < 4.6) {
+        packets.push({
+          ...lerpPt(G.rsu, {
+            x: ex,
+            y: ey
+          }, (t - 2.4) % 1.3 / 1.3),
+          label: 'SDSM',
+          tone: TONE.amber
+        });
+        banner = {
+          text: '⚠ SDSM says the gap is TOO SHORT — you can’t clear before it arrives',
+          tone: 'warn'
+        };
+      } else banner = {
+        text: 'The car held and let it pass — turning then meant a T-bone. Now the gap is safe and it completes',
+        tone: 'ok'
+      };
+      return {
+        layout: 'cross',
+        infra: 'signals',
+        ew: 'green',
+        ns: 'red',
+        cars,
+        sensors,
+        packets,
+        banner,
+        waves: detect || t >= 2.4 && t < 4.6
+      };
+    }
+  }]
+}, {
+  id: 'wwd',
+  category: 'SENSOR',
+  icon: '🚫',
+  title: 'Wrong-Way Driver · LiDAR → SDSM',
+  tagline: 'LiDAR pinpoints a WWD; the RSU warns everyone',
+  duration: 9,
+  why: 'A wrong-way driver enters a divided highway with no V2X device of its own — invisible to other cars until it’s too late. A roadside LiDAR catches it in 3-D (exact position, heading and speed), the V2X Hub / RSU fuses that into an SDSM (SAE J3224), and the RSU broadcasts the wrong-way vehicle’s precise location to every connected car nearby — so they change lanes and avoid the head-on well before they could ever see it.',
+  messages: ['point cloud', 'SDSM'],
+  frame(t) {
+    const wx = lerp(1000, -60, seg(t, 0, 9)); // wrong-way car — heading WEST in an eastbound lane
+    const ex = lerp(-60, 900, seg(t, 0, 9)); // connected car — heading EAST
+    const ey = t < 3.4 ? G.ewLaneY : lerp(G.ewLaneY, 232, seg(t, 3.4, 4.2)); // moves over to avoid
+    const cx2 = lerp(-360, 560, seg(t, 0, 9)); // a second car, further back
+    const cy2 = t < 4.0 ? G.ewLaneY : lerp(G.ewLaneY, 232, seg(t, 4.0, 4.8));
+    const detect = t >= 1.2 && t < 7;
+    const cars = [{
+      id: 'wwd',
+      x: wx,
+      y: G.ewLaneY,
+      or: 'h',
+      kind: 'car',
+      label: 'WWD',
+      alert: true
+    }, {
+      id: 'ego',
+      x: ex,
+      y: ey,
+      or: 'h',
+      kind: 'car',
+      label: 'EGO',
+      alert: t >= 3.2 && t < 5
+    }, {
+      id: 'c2',
+      x: cx2,
+      y: cy2,
+      or: 'h',
+      kind: 'car',
+      alert: t >= 4 && t < 5.6
+    }];
+    const sensors = [{
+      x: 470,
+      y: 112,
+      kind: 'lidar',
+      tx: wx,
+      active: detect,
+      label: detect ? 'WWD detected' : ''
+    }];
+    const packets = [];
+    let banner;
+    if (t < 1.2) banner = {
+      text: 'A wrong-way driver enters the highway — heading straight into oncoming traffic',
+      tone: 'warn',
+      sub: 'unequipped · broadcasting no V2X of its own'
+    };else if (t < 3) {
+      packets.push({
+        ...lerpPt({
+          x: 470,
+          y: 126
+        }, G.rsu, seg(t, 1.2, 3)),
+        label: 'point cloud',
+        tone: TONE.cyan
+      });
+      banner = {
+        text: 'Roadside LiDAR catches it in 3-D — exact position, heading and speed → point cloud to the RSU',
+        tone: 'info'
+      };
+    } else if (t < 5.4) {
+      [{
+        x: ex,
+        y: ey
+      }, {
+        x: cx2,
+        y: cy2
+      }].forEach((tgt, i) => packets.push({
+        ...lerpPt(G.rsu, tgt, (t - 3 + i * 0.5) % 1.3 / 1.3),
+        label: 'SDSM',
+        tone: TONE.cyan
+      }));
+      banner = {
+        text: '⚠ The RSU broadcasts an SDSM pinpointing the WWD’s exact location to every car nearby',
+        tone: 'warn'
+      };
+    } else if (t < 7.2) banner = {
+      text: 'Warned early, the connected cars move over and let the wrong-way driver pass',
+      tone: 'ok'
+    };else banner = {
+      text: 'SDSM wrong-way alert — infrastructure sees the danger drivers can’t, in time to avoid it',
+      tone: 'ok'
+    };
+    return {
+      layout: 'straightH',
+      infra: 'rsu',
+      cars,
       sensors,
       packets,
       banner,
