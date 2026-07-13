@@ -25,7 +25,7 @@ const renders = (el, msg) => { try { RS.renderToStaticMarkup(el); pass++; } catc
 function loadApp() {
   const jsx = fs.readFileSync(path.join(ROOT, 'src/app.jsx'), 'utf8').replace(/ReactDOM\.createRoot[\s\S]*$/, '');
   const code = Babel.transform(jsx, { presets: ['react'] }).code;
-  const names = 'App,WorldBuilderTab,UseCasesTab,GlossaryTab,AnatomyTab,CabinetDiagram,RsuDiagram,ObuDiagram,FirstRun,QuizTab,MiniScene,DeviceArt,SCENARIOS,QUIZ,GLOSSARY,TYPES,MODELS,ALL_MSGS,MSG_COLOR,MSG_RECIPE,SENSOR_FEED_INFO,linkStreams,decodePacket,liveXY,connKind,isVehicle,isSensor,canRequestPriority,backhaulKbps,glossaryTermFor,validCabPair,findGlossaryItem';
+  const names = 'App,WorldBuilderTab,UseCasesTab,GlossaryTab,AnatomyTab,CabinetDiagram,RsuDiagram,ObuDiagram,FirstRun,QuizTab,MiniScene,DeviceArt,SCENARIOS,QUIZ,GLOSSARY,TYPES,MODELS,ALL_MSGS,MSG_COLOR,MSG_RECIPE,CATEGORIES,SENSOR_FEED_INFO,linkStreams,decodePacket,liveXY,connKind,isVehicle,isSensor,canRequestPriority,backhaulKbps,glossaryTermFor,validCabPair,findGlossaryItem';
   const factory = new Function('React', 'ReactDOM', 'window', 'document', 'performance', 'requestAnimationFrame', 'cancelAnimationFrame', 'localStorage', code + `\n;return {${names}};`);
   const win = { innerWidth: 1440, addEventListener() {}, removeEventListener() {}, location: { href: 'file:///x', hash: '' }, history: { replaceState() {} } };
   const ls = { getItem: () => null, setItem() {}, removeItem() {} };
@@ -210,10 +210,19 @@ m.SCENARIOS.forEach((sc) => {
   runs.forEach((r) => { const dur = r.duration || sc.duration; for (let t = 0; t <= dur; t += dur / 8) { try { RS.renderToStaticMarkup(el(m.MiniScene, { frame: r.frame(t) })); } catch (e) { frameErrs++; console.log('  \x1b[31m✗\x1b[0m scenario ' + sc.id + ' @' + t.toFixed(1) + ': ' + e.message); } } });
 });
 ok(frameErrs === 0, 'all scenario/variant frames render across their timeline');
-ok(m.SCENARIOS.every((s) => ['V2I', 'V2V', 'V2P', 'V2N'].includes(s.category)), 'every scenario has a valid category');
+const catIds = m.CATEGORIES.map((c) => c.id);
+ok(m.SCENARIOS.every((s) => catIds.includes(s.category)), 'every scenario has a valid category');
 const scnIds = m.SCENARIOS.map((s) => s.id);
 ok(scnIds.includes('sensordet') && scnIds.includes('hubfusion'), 'roadside-sensor use cases present');
 ok(m.SCENARIOS.find((s) => s.id === 'sensordet').variants.length === 3, 'sensordet toggles LiDAR/radar/camera');
+// dedicated Sensor sub-folder groups the roadside-sensing scenarios
+ok(catIds.includes('SENSOR'), 'Sensor category exists');
+const sensorScns = m.SCENARIOS.filter((s) => s.category === 'SENSOR');
+ok(sensorScns.length >= 4, `Sensor folder has ${sensorScns.length} scenarios (≥ 4)`);
+ok(['sensordet', 'hubfusion', 'permleft', 'wwd'].every((idv) => sensorScns.some((s) => s.id === idv)), 'Sensor folder holds detection, fusion, permissive-left & wrong-way');
+ok(m.SCENARIOS.find((s) => s.id === 'permleft').variants.length === 2, 'permissive left has go / wait variants');
+ok(m.SCENARIOS.find((s) => s.id === 'permleft').variants.every((v) => v.messages.includes('SDSM')), 'permissive-left variants use an SDSM');
+ok(m.SCENARIOS.find((s) => s.id === 'wwd').messages.includes('SDSM'), 'wrong-way alert uses an SDSM');
 
 // ---------- 9. quiz ----------
 console.log('• quiz');
